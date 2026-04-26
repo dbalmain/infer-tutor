@@ -1,0 +1,17 @@
+{
+  "name": "infer-tutor",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun --filter @infer-tutor/web dev",
+    "build": "bun --filter @infer-tutor/web build",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/bun": "latest"
+  }
+}
