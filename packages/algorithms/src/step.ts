@@ -1,14 +1,20 @@
-import type { Env, NodeId, Subst, Type } from "@infer-tutor/lang";
+import type { Env, NodeId, Scheme, Subst, TVarName, Type } from "@infer-tutor/lang";
 
 export type StepKind =
   | "infer-enter"
   | "infer-exit"
   | "unify-enter"
+  | "unify-recurse"
   | "unify-success"
   | "unify-fail"
+  | "bind-var"
+  | "lookup"
   | "instantiate"
   | "generalize"
-  | "fresh"
+  | "fresh-param"
+  | "fresh-app"
+  | "subst-apply"
+  | "env-extend"
   | "done";
 
 // A snapshot of algorithm state after one notable event. The UI is a pure
@@ -23,8 +29,29 @@ export type Step = {
   // per-node type knowledge — what type each AST node currently has assigned.
   // `applySubstType(step.subst, step.nodeTypes.get(id))` is what to display.
   nodeTypes: Map<NodeId, Type>;
+  // Per-node parameter type. Used for Lam nodes so the param annotation can
+  // appear (`\(x : t0) -> ?`) before the body has been inferred.
+  paramTypes: Map<NodeId, Type>;
+  // Per-Let-node scheme of the bound name. Set at the value's infer-exit
+  // (with empty `vars`) so the Let can display the unquantified type before
+  // generalize, then updated at generalize with the full forall scheme.
+  bindingSchemes: Map<NodeId, Scheme>;
+  // Per-Lam-node body type. Decoupled from the body node's own recorded
+  // type so the Lam display only "sees" its body type at the body's
+  // infer-exit step, not at intermediate steps inside the body.
+  lamBodyTypes: Map<NodeId, Type>;
+  // Per-Var-node scheme. Set at the lookup step so the Var displays the
+  // full looked-up scheme (e.g. `forall t0. t0 -> t0`); cleared at
+  // instantiate so the freshly-renamed type takes over.
+  varSchemes: Map<NodeId, Scheme>;
+  // Every fresh type variable introduced by the algorithm so far. The UI
+  // computes the "still open" set as introducedVars \ subst.keys().
+  introducedVars: Set<TVarName>;
   message: string;
-  detail?: { left: Type; right: Type } | { name: string; type: Type };
+  detail?:
+    | { left: Type; right: Type }
+    | { name: string; type: Type }
+    | { input: Type; output: Type };
 };
 
 export type InferResult = {

@@ -1,34 +1,28 @@
 import {
   type Expr,
   type NodeId,
-  type Subst,
+  type Scheme,
   type Type,
-  applySubstType,
-  showExpr,
+  showScheme,
   showType,
 } from "@infer-tutor/lang";
 
 type Props = {
   expr: Expr;
   nodeTypes: Map<NodeId, Type>;
-  subst: Subst;
+  paramTypes: Map<NodeId, Type>;
+  bindingSchemes: Map<NodeId, Scheme>;
+  lamBodyTypes: Map<NodeId, Type>;
+  varSchemes: Map<NodeId, Scheme>;
   focusId?: NodeId;
 };
 
-export function AstView({ expr, nodeTypes, subst, focusId }: Props): JSX.Element {
-  return <div className="ast">{renderNode(expr, nodeTypes, subst, focusId)}</div>;
+export function AstView(props: Props): JSX.Element {
+  return <div className="ast">{renderNode(props.expr, props)}</div>;
 }
 
-function renderNode(
-  e: Expr,
-  nodeTypes: Map<NodeId, Type>,
-  subst: Subst,
-  focusId: NodeId | undefined,
-): JSX.Element {
-  const known = nodeTypes.get(e.id);
-  const display = known ? applySubstType(subst, known) : undefined;
-  const focused = e.id === focusId;
-  const label = nodeLabel(e);
+function renderNode(e: Expr, ctx: Props): JSX.Element {
+  const focused = e.id === ctx.focusId;
   const kind = nodeKind(e);
 
   return (
@@ -36,21 +30,80 @@ function renderNode(
       <div className="ast-line">
         <span className={"ast-node" + (focused ? " focus" : "")}>
           <span className="ast-kind">{kind}</span>
-          <span className="ast-label">{label}</span>
-          {display ? (
-            <span className="ast-type">: {showType(display)}</span>
-          ) : (
-            <span className="ast-type unknown">: ?</span>
-          )}
+          {renderLabelAndType(e, ctx)}
         </span>
       </div>
       {childExprs(e).length > 0 && (
         <div className="ast-children">
-          {childExprs(e).map((c) => renderNode(c, nodeTypes, subst, focusId))}
+          {childExprs(e).map((c) => renderNode(c, ctx))}
         </div>
       )}
     </div>
   );
+}
+
+function renderLabelAndType(e: Expr, ctx: Props): JSX.Element {
+  // Lam gets an inline annotation: `\(x : t0) -> Bool`. Skip the trailing
+  // `: type` since the function-type parts are already shown inline.
+  if (e.kind === "Lam") {
+    const paramT = ctx.paramTypes.get(e.id);
+    // Use lamBodyTypes (set at body's infer-exit) rather than the body
+    // node's own type — those update at different times.
+    const bodyT = ctx.lamBodyTypes.get(e.id);
+    return (
+      <span className="ast-label">
+        \({e.param} : <Slot t={paramT} />) -&gt; <Slot t={bodyT} />
+      </span>
+    );
+  }
+
+  // Let displays the bound name's scheme inline + the body's type:
+  //   `let id : forall t0. t0 -> t0 in Bool`
+  if (e.kind === "Let") {
+    const sc = ctx.bindingSchemes.get(e.id);
+    const bodyT = ctx.nodeTypes.get(e.body.id);
+    return (
+      <span className="ast-label">
+        let {e.name} : <SchemeSlot sc={sc} /> in <Slot t={bodyT} />
+      </span>
+    );
+  }
+
+  // Var prefers the looked-up scheme (with `forall`) when present —
+  // visible between lookup and instantiate.
+  if (e.kind === "Var") {
+    const sc = ctx.varSchemes.get(e.id);
+    if (sc) {
+      return (
+        <>
+          <span className="ast-label">{e.name}</span>{" "}
+          <span className="ast-type">: {showScheme(sc)}</span>
+        </>
+      );
+    }
+  }
+
+  const display = ctx.nodeTypes.get(e.id);
+  return (
+    <>
+      <span className="ast-label">{nodeLabel(e)}</span>{" "}
+      {display ? (
+        <span className="ast-type">: {showType(display)}</span>
+      ) : (
+        <span className="ast-type unknown">: ?</span>
+      )}
+    </>
+  );
+}
+
+function SchemeSlot({ sc }: { sc: Scheme | undefined }): JSX.Element {
+  if (!sc) return <span className="ast-type unknown">?</span>;
+  return <span className="ast-type">{showScheme(sc)}</span>;
+}
+
+function Slot({ t }: { t: Type | undefined }): JSX.Element {
+  if (!t) return <span className="ast-type unknown">?</span>;
+  return <span className="ast-type">{showType(t)}</span>;
 }
 
 function nodeKind(e: Expr): string {
@@ -88,9 +141,4 @@ function childExprs(e: Expr): Expr[] {
     case "If":
       return [e.cond, e.then, e.else];
   }
-}
-
-// kept for debugging; not used
-export function _showExpr(e: Expr): string {
-  return showExpr(e);
 }

@@ -12,6 +12,20 @@ export type Literal =
   | { kind: "Int"; value: number }
   | { kind: "Bool"; value: boolean };
 
+// Build a map from each node's id to its immediate parent expression. Useful
+// for "show me the surrounding context of this node".
+export function buildParentMap(root: Expr): Map<NodeId, Expr> {
+  const m = new Map<NodeId, Expr>();
+  const walk = (e: Expr) => {
+    for (const c of children(e)) {
+      m.set(c.id, e);
+      walk(c);
+    }
+  };
+  walk(root);
+  return m;
+}
+
 export function children(e: Expr): Expr[] {
   switch (e.kind) {
     case "Var":

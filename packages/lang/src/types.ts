@@ -134,6 +134,20 @@ export function instantiate(sc: Scheme, fresh: FreshSupply): { type: Type; mappi
   return { type: applySubstType(mapping, sc.body), mapping };
 }
 
+export function typeEquals(a: Type, b: Type): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "TVar":
+      return (b as { kind: "TVar"; name: string }).name === a.name;
+    case "TCon":
+      return (b as { kind: "TCon"; name: string }).name === a.name;
+    case "TFun": {
+      const bb = b as { kind: "TFun"; from: Type; to: Type };
+      return typeEquals(a.from, bb.from) && typeEquals(a.to, bb.to);
+    }
+  }
+}
+
 export function showType(t: Type, paren = false): string {
   switch (t.kind) {
     case "TVar":
