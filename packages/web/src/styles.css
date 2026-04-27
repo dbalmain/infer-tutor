@@ -175,6 +175,10 @@ body {
   outline: 1px solid var(--accent);
 }
 
+.ast-node.secondary {
+  outline: 1px dashed var(--muted);
+}
+
 .ast-kind {
   color: var(--muted);
   font-size: 11px;

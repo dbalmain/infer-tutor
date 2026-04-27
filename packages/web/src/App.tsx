@@ -113,8 +113,29 @@ export function App(): JSX.Element {
   }, [visibleIxs, stepIx]);
 
   const currentStep = steps[stepIx];
-  const focusId = currentStep?.nodeId;
   const visiblePos = visibleIxs.indexOf(stepIx);
+
+  // For the AST view, swap focus and secondary on infer-exit: the primary
+  // highlight goes to the node we're returning to (the parent), and the
+  // secondary marks the child we just exited. infer-enter keeps the focus
+  // on the entered child but adds a secondary on the surrounding parent.
+  let astFocusId: NodeId | undefined;
+  let astSecondaryId: NodeId | undefined;
+  if (currentStep?.nodeId !== undefined) {
+    const nid = currentStep.nodeId;
+    const parent = parentMap.get(nid);
+    if (currentStep.kind === "infer-exit" && parent) {
+      astFocusId = parent.id;
+      astSecondaryId = nid;
+    } else if (currentStep.kind === "infer-enter" && parent) {
+      astFocusId = nid;
+      astSecondaryId = parent.id;
+    } else {
+      astFocusId = nid;
+    }
+  }
+  // Step log + ExprFocusView still operate on the step's literal nodeId.
+  const focusId = currentStep?.nodeId;
 
   const liveVars = useMemo(() => {
     if (!currentStep) return new Set<TVarName>();
@@ -215,7 +236,8 @@ export function App(): JSX.Element {
                   bindingSchemes={currentStep.bindingSchemes}
                   lamBodyTypes={currentStep.lamBodyTypes}
                   varSchemes={currentStep.varSchemes}
-                  focusId={focusId}
+                  focusId={astFocusId}
+                  secondaryId={astSecondaryId}
                 />
               )}
             </div>

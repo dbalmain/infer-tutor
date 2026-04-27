@@ -15,6 +15,7 @@ type Props = {
   lamBodyTypes: Map<NodeId, Type>;
   varSchemes: Map<NodeId, Scheme>;
   focusId?: NodeId;
+  secondaryId?: NodeId;
 };
 
 export function AstView(props: Props): JSX.Element {
@@ -23,12 +24,16 @@ export function AstView(props: Props): JSX.Element {
 
 function renderNode(e: Expr, ctx: Props): JSX.Element {
   const focused = e.id === ctx.focusId;
+  const secondary = !focused && e.id === ctx.secondaryId;
   const kind = nodeKind(e);
+
+  const className =
+    "ast-node" + (focused ? " focus" : "") + (secondary ? " secondary" : "");
 
   return (
     <div key={e.id}>
       <div className="ast-line">
-        <span className={"ast-node" + (focused ? " focus" : "")}>
+        <span className={className}>
           <span className="ast-kind">{kind}</span>
           {renderLabelAndType(e, ctx)}
         </span>
