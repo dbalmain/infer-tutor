@@ -15,7 +15,22 @@ export type StepKind =
   | "fresh-app"
   | "subst-apply"
   | "env-extend"
-  | "done";
+  | "done"
+  // W' only:
+  | "gen-enter"         // entering a node during constraint generation
+  | "gen-exit"          // leaving a node during constraint generation
+  | "emit-constraint"   // record a new constraint (deferred unification)
+  | "solve-phase"       // transition from generation to solving
+  | "solve-constraint"; // begin solving one constraint
+
+// A constraint is an equation between two types that must be satisfied.
+// W' collects these during generation, then solves them in a separate phase.
+export type Constraint = {
+  id: number;
+  left: Type;
+  right: Type;
+  reason: string;
+};
 
 // A snapshot of algorithm state after one notable event. The UI is a pure
 // function of this list + a current index, so renders are reproducible and
@@ -40,6 +55,9 @@ export type Step = {
   // type so the Lam display only "sees" its body type at the body's
   // infer-exit step, not at intermediate steps inside the body.
   lamBodyTypes: Map<NodeId, Type>;
+  // Per-Let-node body type. Same decoupling as lamBodyTypes: the Let's
+  // "in <type>" slot stays ? until the body's infer-exit/gen-exit fires.
+  letBodyTypes: Map<NodeId, Type>;
   // Per-Var-node scheme. Set at the lookup step so the Var displays the
   // full looked-up scheme (e.g. `forall t0. t0 -> t0`); cleared at
   // instantiate so the freshly-renamed type takes over.
@@ -52,6 +70,10 @@ export type Step = {
     | { left: Type; right: Type }
     | { name: string; type: Type }
     | { input: Type; output: Type };
+  // W' only (empty arrays for W):
+  constraints: Constraint[];
+  solvedConstraintIds: number[];
+  activeConstraintId?: number;
 };
 
 export type InferResult = {

@@ -33,6 +33,7 @@ class Tracer {
   paramTypes: Map<NodeId, Type> = new Map();
   bindingSchemes: Map<NodeId, Scheme> = new Map();
   lamBodyTypes: Map<NodeId, Type> = new Map();
+  letBodyTypes: Map<NodeId, Type> = new Map();
   varSchemes: Map<NodeId, Scheme> = new Map();
   introducedVars: Set<TVarName> = new Set();
 
@@ -54,10 +55,13 @@ class Tracer {
       paramTypes: cloneNodeTypes(this.paramTypes),
       bindingSchemes: new Map(this.bindingSchemes),
       lamBodyTypes: cloneNodeTypes(this.lamBodyTypes),
+      letBodyTypes: cloneNodeTypes(this.letBodyTypes),
       varSchemes: new Map(this.varSchemes),
       introducedVars: new Set(this.introducedVars),
       message: args.message,
       detail: args.detail,
+      constraints: [],
+      solvedConstraintIds: [],
     });
   }
 
@@ -75,6 +79,10 @@ class Tracer {
 
   recordLamBodyType(id: NodeId, t: Type): void {
     this.lamBodyTypes.set(id, t);
+  }
+
+  recordLetBodyType(id: NodeId, t: Type): void {
+    this.letBodyTypes.set(id, t);
   }
 
   recordVarScheme(id: NodeId, sc: Scheme): void {
@@ -170,6 +178,9 @@ export function inferW(env: Env, expr: Expr): InferResult {
     }
     for (const [id, sc] of tracer.bindingSchemes) {
       tracer.bindingSchemes.set(id, applySubstScheme(subst, sc));
+    }
+    for (const [id, t] of tracer.letBodyTypes) {
+      tracer.letBodyTypes.set(id, applySubstType(subst, t));
     }
     tracer.push({
       kind: "done",
@@ -376,9 +387,10 @@ function infer(
           message: `unified`,
         });
         const resolvedResult = applySubstType(s3, tv);
-        // Update App's own recorded type so the AST visibly transitions
-        // here rather than at the bind-var step inside unify.
+        // Update App's own recorded type and also the function node, both
+        // of which may still show stale TVars (e.g. t1 → t1 after t1 ↦ Int).
         tr.recordNodeType(expr.id, resolvedResult);
+        tr.recordNodeType(expr.fn.id, applySubstType(s3, left));
         tr.pushSubstApply({
           nodeId: expr.id,
           env: applySubstEnv(s3, env),
@@ -458,8 +470,13 @@ function infer(
         message: `extend env with ${expr.name} : ${showScheme(sc)}`,
         detail: { name: expr.name, type: sc.body },
       });
-      const { subst: s2, type: t2 } = infer(env2, expr.body, s1, tr, fresh, "body of let");
-      tr.recordNodeType(expr.id, t2);
+      const { subst: s2, type: t2 } = infer(env2, expr.body, s1, tr, fresh, "body of let",
+        () => {
+          const t = tr.nodeTypes.get(expr.body.id);
+          if (t) tr.recordLetBodyType(expr.id, t);
+        },
+      );
+      tr.recordNodeType(expr.id, applySubstType(s2, t2));
       onBeforeExit?.(t2, s2);
       tr.push({
         kind: "infer-exit",

@@ -13,6 +13,7 @@ type Props = {
   paramTypes: Map<NodeId, Type>;
   bindingSchemes: Map<NodeId, Scheme>;
   lamBodyTypes: Map<NodeId, Type>;
+  letBodyTypes: Map<NodeId, Type>;
   varSchemes: Map<NodeId, Scheme>;
   focusId?: NodeId;
   secondaryId?: NodeId;
@@ -66,7 +67,7 @@ function renderLabelAndType(e: Expr, ctx: Props): JSX.Element {
   //   `let id : forall t0. t0 -> t0 in Bool`
   if (e.kind === "Let") {
     const sc = ctx.bindingSchemes.get(e.id);
-    const bodyT = ctx.nodeTypes.get(e.body.id);
+    const bodyT = ctx.letBodyTypes.get(e.id);
     return (
       <span className="ast-label">
         let {e.name} : <SchemeSlot sc={sc} /> in <Slot t={bodyT} />

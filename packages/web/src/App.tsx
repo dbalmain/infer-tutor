@@ -12,8 +12,9 @@ import {
   ParseError,
   typeEquals,
 } from "@infer-tutor/lang";
-import { defaultEnv, inferW, type InferResult, type Step } from "@infer-tutor/algorithms";
+import { defaultEnv, inferW, inferWprime, type InferResult, type Step } from "@infer-tutor/algorithms";
 import { AstView } from "./components/AstView";
+import { ConstraintsPanel } from "./components/ConstraintsPanel";
 import { EnvPanel } from "./components/EnvPanel";
 import { SubstPanel } from "./components/SubstPanel";
 import { StepLog } from "./components/StepLog";
@@ -58,11 +59,14 @@ function naturalVarCompare(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
+type Algorithm = "W" | "W-prime";
+
 export function App(): JSX.Element {
   const [src, setSrc] = useState(DEFAULT_EXPR);
   const [submitted, setSubmitted] = useState(DEFAULT_EXPR);
   const [stepIx, setStepIx] = useState(0);
   const [hideNoops, setHideNoops] = useState(true);
+  const [algorithm, setAlgorithm] = useState<Algorithm>("W");
 
   const parseResult = useMemo<{ expr?: Expr; error?: string }>(() => {
     try {
@@ -75,8 +79,10 @@ export function App(): JSX.Element {
 
   const inferResult = useMemo<InferResult | undefined>(() => {
     if (!parseResult.expr) return undefined;
-    return inferW(defaultEnv(), parseResult.expr);
-  }, [parseResult.expr]);
+    return algorithm === "W"
+      ? inferW(defaultEnv(), parseResult.expr)
+      : inferWprime(defaultEnv(), parseResult.expr);
+  }, [parseResult.expr, algorithm]);
 
   const parentMap = useMemo<Map<NodeId, Expr>>(() => {
     if (!parseResult.expr) return new Map();
@@ -124,10 +130,10 @@ export function App(): JSX.Element {
   if (currentStep?.nodeId !== undefined) {
     const nid = currentStep.nodeId;
     const parent = parentMap.get(nid);
-    if (currentStep.kind === "infer-exit" && parent) {
+    if ((currentStep.kind === "infer-exit" || currentStep.kind === "gen-exit") && parent) {
       astFocusId = parent.id;
       astSecondaryId = nid;
-    } else if (currentStep.kind === "infer-enter" && parent) {
+    } else if ((currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter") && parent) {
       astFocusId = nid;
       astSecondaryId = parent.id;
     } else {
@@ -171,7 +177,10 @@ export function App(): JSX.Element {
 
   const unifyDetail =
     currentStep &&
-    (currentStep.kind === "unify-enter" || currentStep.kind === "unify-fail") &&
+    (currentStep.kind === "unify-enter" ||
+      currentStep.kind === "unify-fail" ||
+      currentStep.kind === "solve-constraint" ||
+      currentStep.kind === "emit-constraint") &&
     currentStep.detail &&
     "left" in currentStep.detail
       ? currentStep.detail
@@ -208,6 +217,20 @@ export function App(): JSX.Element {
     <div className="app">
       <div className="topbar">
         <h1>infer-tutor</h1>
+        <div className="algo-picker">
+          {(["W", "W-prime"] as Algorithm[]).map((a) => (
+            <label key={a} className={"algo-option" + (algorithm === a ? " selected" : "")}>
+              <input
+                type="radio"
+                name="algorithm"
+                value={a}
+                checked={algorithm === a}
+                onChange={() => setAlgorithm(a)}
+              />
+              {a === "W" ? "Algorithm W" : "Algorithm W′"}
+            </label>
+          ))}
+        </div>
         <input
           className="input"
           value={src}
@@ -223,7 +246,7 @@ export function App(): JSX.Element {
       {parseResult.error && <div className="error-banner">parse error: {parseResult.error}</div>}
       {inferResult?.error && <div className="error-banner">type error: {inferResult.error}</div>}
 
-      <div className="workspace">
+      <div className={"workspace" + (algorithm === "W-prime" ? " workspace-three-col" : "")}>
         <div className="col">
           <div className="panel" style={{ flex: 1 }}>
             <div className="panel-header">AST · types update as the algorithm runs</div>
@@ -235,6 +258,7 @@ export function App(): JSX.Element {
                   paramTypes={currentStep.paramTypes}
                   bindingSchemes={currentStep.bindingSchemes}
                   lamBodyTypes={currentStep.lamBodyTypes}
+                  letBodyTypes={currentStep.letBodyTypes}
                   varSchemes={currentStep.varSchemes}
                   focusId={astFocusId}
                   secondaryId={astSecondaryId}
@@ -296,7 +320,7 @@ export function App(): JSX.Element {
                 <div>
                   <div style={{ color: "var(--accent-2)", marginBottom: 6 }}>{currentStep.kind}</div>
                   <div>{currentStep.message}</div>
-                  {currentStep.kind === "infer-enter" && parseResult.expr && (
+                  {(currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter") && parseResult.expr && (
                     <div className="expr-focus" style={{ marginTop: 10 }}>
                       <ExprFocusView expr={parseResult.expr} focusId={focusId} />
                     </div>
@@ -314,6 +338,23 @@ export function App(): JSX.Element {
             </div>
           </div>
         </div>
+
+        {algorithm === "W-prime" && (
+          <div className="col">
+            <div className="panel" style={{ flex: 1 }}>
+              <div className="panel-header">Constraints</div>
+              <div className="panel-body" style={{ padding: 0 }}>
+                {currentStep && (
+                  <ConstraintsPanel
+                    constraints={currentStep.constraints}
+                    solvedConstraintIds={currentStep.solvedConstraintIds}
+                    activeConstraintId={currentStep.activeConstraintId}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="bottombar">

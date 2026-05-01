@@ -92,6 +92,10 @@ body {
   overflow: hidden;
 }
 
+.workspace.workspace-three-col {
+  grid-template-columns: 1.4fr 1fr 0.8fr;
+}
+
 .col {
   background: var(--bg);
   display: flex;
@@ -390,6 +394,90 @@ body {
 }
 
 .empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Algorithm picker */
+.algo-picker {
+  display: flex;
+  gap: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.algo-option {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.algo-option input[type="radio"] {
+  display: none;
+}
+
+.algo-option.selected {
+  background: var(--highlight);
+  color: var(--accent);
+}
+
+/* Constraints panel (W') */
+.constraints-list {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+.constraint-row {
+  display: grid;
+  grid-template-columns: 2.5em 1fr;
+  grid-template-rows: auto auto;
+  padding: 5px 12px;
+  gap: 0 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  transition: background 0.1s;
+}
+
+.constraint-row.active {
+  background: var(--highlight);
+  color: var(--text);
+}
+
+.constraint-row.solved {
+  opacity: 0.45;
+}
+
+.constraint-id {
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.constraint-row.active .constraint-id {
+  color: var(--accent-2);
+}
+
+.constraint-body {
+  color: inherit;
+}
+
+.constraint-row.active .constraint-body {
+  color: var(--text);
+}
+
+.constraint-reason {
+  font-size: 11px;
   color: var(--muted);
   font-style: italic;
 }

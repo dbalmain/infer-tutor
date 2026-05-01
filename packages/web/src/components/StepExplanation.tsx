@@ -17,9 +17,24 @@ function explain(step: Step): JSX.Element | null {
       const isRoot = step.message.startsWith("infer root expression:");
       return (
         <p>
+          <strong>Inference: entering node.</strong>{" "}
           Begin inferring {isRoot ? "the root expression" : "this subexpression"}.
           We descend into its parts, infer types for each, and combine them
           according to the rule for this expression's shape.
+        </p>
+      );
+    }
+
+    case "gen-enter": {
+      const isRoot = step.message.includes("root expression");
+      return (
+        <p>
+          <strong>Generation phase: entering node.</strong>{" "}
+          {isRoot
+            ? "Begin the constraint-generation walk from the root."
+            : "Descend into this subexpression to assign type variables and collect constraints."}{" "}
+          No unification happens here — we're only describing what equations
+          the type must satisfy, deferring the solving to a later phase.
         </p>
       );
     }
@@ -45,9 +60,20 @@ function explain(step: Step): JSX.Element | null {
     case "infer-exit":
       return (
         <p>
+          <strong>Inference: leaving node.</strong>{" "}
           This subexpression's type is now known. It returns up to the
           surrounding context where it'll be unified, applied, or just
           returned as the program's overall type.
+        </p>
+      );
+
+    case "gen-exit":
+      return (
+        <p>
+          <strong>Generation phase: leaving node.</strong> All constraints
+          for this subexpression have been emitted. The type shown may still
+          be a fresh variable — it will be resolved once the solve phase works
+          through the constraint list.
         </p>
       );
 
@@ -275,8 +301,71 @@ function explain(step: Step): JSX.Element | null {
     case "done":
       return (
         <p>
-          Algorithm W has finished. Applying the final substitution to the
+          The algorithm has finished. Applying the final substitution to the
           root type gives the program's type.
+        </p>
+      );
+
+    case "emit-constraint":
+      return (
+        <>
+          <p>
+            <strong>Constraint emitted.</strong> W′ doesn't unify immediately
+            — instead it records an equation between two types and defers the
+            work to the solve phase. This separates <em>typing structure</em>{" "}
+            (what equations the grammar requires) from{" "}
+            <em>solving</em> (finding the substitution that satisfies them).
+          </p>
+          <p>
+            The constraint list on the right accumulates all such equations.
+            You'll see them solved one by one after generation completes.
+          </p>
+        </>
+      );
+
+    case "solve-phase": {
+      const pending = step.constraints.filter(
+        (c) => !step.solvedConstraintIds.includes(c.id),
+      ).length;
+      if (pending === 0) {
+        return (
+          <>
+            <p>
+              <strong>No constraints to solve here.</strong> The value
+              expression generated no deferred equations, so there's nothing
+              to unify before generalizing. We proceed straight to{" "}
+              <code>generalize</code>.
+            </p>
+            <p>
+              This is common for lambdas and variables, which never emit
+              constraints — only applications and conditionals do.
+            </p>
+          </>
+        );
+      }
+      return (
+        <>
+          <p>
+            <strong>Entering solve phase.</strong> All constraints for this
+            scope have been generated. Now unification works through the list,
+            building up the substitution as it goes.
+          </p>
+          <p>
+            For let-bindings this happens <em>before</em> generalizing — you
+            need the solved type to know which variables are safe to close
+            over with <code>forall</code>.
+          </p>
+        </>
+      );
+    }
+
+    case "solve-constraint":
+      return (
+        <p>
+          <strong>Solving a constraint.</strong> Apply the current
+          substitution to both sides, then unify them. Any new variable
+          bindings discovered here are composed into the running substitution
+          and immediately reflected in the AST view.
         </p>
       );
   }
