@@ -11,8 +11,9 @@ import {
   parse,
   ParseError,
   typeEquals,
+  children,
 } from "@infer-tutor/lang";
-import { defaultEnv, inferW, inferWprime, type InferResult, type Step } from "@infer-tutor/algorithms";
+import { defaultEnv, inferW, inferWprime, inferM, type InferResult, type Step } from "@infer-tutor/algorithms";
 import { AstView } from "./components/AstView";
 import { ConstraintsPanel } from "./components/ConstraintsPanel";
 import { EnvPanel } from "./components/EnvPanel";
@@ -30,10 +31,10 @@ function isNoopSubstApply(s: Step): boolean {
   return typeEquals(s.detail.input, s.detail.output);
 }
 
-// "Live" = appears as a raw TVar anywhere visible — node types, param
-// types, schemes, env schemes, or σ RHS. A σ entry whose key isn't live
-// has been fully consumed and can be greyed out. (We use raw types
-// because the AST view no longer auto-applies σ.)
+// "Live" = appears as a raw TVar anywhere visible — node types, expected
+// types, param types, schemes, env schemes, or σ RHS. A σ entry whose key
+// isn't live has been fully consumed and can be greyed out. (We use raw
+// types because the AST view no longer auto-applies σ.)
 function computeLiveVars(step: Step): Set<TVarName> {
   const out = new Set<TVarName>();
   const addType = (t: Type) => {
@@ -43,6 +44,7 @@ function computeLiveVars(step: Step): Set<TVarName> {
     for (const v of freeTypeVarsScheme(sc)) out.add(v);
   };
   for (const t of step.nodeTypes.values()) addType(t);
+  for (const t of step.expectedTypes.values()) addType(t);
   for (const t of step.paramTypes.values()) addType(t);
   for (const t of step.lamBodyTypes.values()) addType(t);
   for (const sc of step.bindingSchemes.values()) addScheme(sc);
@@ -59,7 +61,17 @@ function naturalVarCompare(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-type Algorithm = "W" | "W-prime";
+function buildNodeMap(root: Expr): Map<NodeId, Expr> {
+  const out = new Map<NodeId, Expr>();
+  const walk = (e: Expr) => {
+    out.set(e.id, e);
+    for (const child of children(e)) walk(child);
+  };
+  walk(root);
+  return out;
+}
+
+type Algorithm = "W" | "W-prime" | "M";
 
 export function App(): JSX.Element {
   const [src, setSrc] = useState(DEFAULT_EXPR);
@@ -79,14 +91,18 @@ export function App(): JSX.Element {
 
   const inferResult = useMemo<InferResult | undefined>(() => {
     if (!parseResult.expr) return undefined;
-    return algorithm === "W"
-      ? inferW(defaultEnv(), parseResult.expr)
-      : inferWprime(defaultEnv(), parseResult.expr);
+    if (algorithm === "W") return inferW(defaultEnv(), parseResult.expr);
+    if (algorithm === "W-prime") return inferWprime(defaultEnv(), parseResult.expr);
+    return inferM(defaultEnv(), parseResult.expr);
   }, [parseResult.expr, algorithm]);
 
   const parentMap = useMemo<Map<NodeId, Expr>>(() => {
     if (!parseResult.expr) return new Map();
     return buildParentMap(parseResult.expr);
+  }, [parseResult.expr]);
+  const nodeMap = useMemo<Map<NodeId, Expr>>(() => {
+    if (!parseResult.expr) return new Map();
+    return buildNodeMap(parseResult.expr);
   }, [parseResult.expr]);
 
   const steps = inferResult?.steps ?? [];
@@ -130,10 +146,20 @@ export function App(): JSX.Element {
   if (currentStep?.nodeId !== undefined) {
     const nid = currentStep.nodeId;
     const parent = parentMap.get(nid);
-    if ((currentStep.kind === "infer-exit" || currentStep.kind === "gen-exit") && parent) {
+    const focusedExpr = nodeMap.get(nid);
+    if (
+      currentStep.kind === "subst-apply" &&
+      currentStep.detail &&
+      "where" in currentStep.detail &&
+      currentStep.detail.where === "arg type after fn check" &&
+      focusedExpr?.kind === "App"
+    ) {
+      astFocusId = nid;
+      astSecondaryId = focusedExpr.arg.id;
+    } else if ((currentStep.kind === "infer-exit" || currentStep.kind === "gen-exit" || currentStep.kind === "check-exit") && parent) {
       astFocusId = parent.id;
       astSecondaryId = nid;
-    } else if ((currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter") && parent) {
+    } else if ((currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter" || currentStep.kind === "check-enter") && parent) {
       astFocusId = nid;
       astSecondaryId = parent.id;
     } else {
@@ -185,13 +211,33 @@ export function App(): JSX.Element {
     "left" in currentStep.detail
       ? currentStep.detail
       : undefined;
-  const lookupName =
+  const envHighlight =
     currentStep &&
-    currentStep.kind === "lookup" &&
+    (currentStep.kind === "lookup" || currentStep.kind === "env-extend") &&
     currentStep.detail &&
     "name" in currentStep.detail
       ? currentStep.detail.name
       : undefined;
+  const substHighlights = useMemo(() => {
+    const highlights = new Set<TVarName>();
+    if (!currentStep) return highlights;
+    if (
+      currentStep.kind === "bind-var" &&
+      currentStep.detail &&
+      "name" in currentStep.detail
+    ) {
+      highlights.add(currentStep.detail.name);
+      return highlights;
+    }
+    if (currentStep.kind !== "subst-compose") return highlights;
+    const prevStep = steps[stepIx - 1];
+    if (!prevStep) return highlights;
+    for (const [name, type] of currentStep.subst) {
+      const prevType = prevStep.subst.get(name);
+      if (prevType && !typeEquals(prevType, type)) highlights.add(name);
+    }
+    return highlights;
+  }, [currentStep, steps, stepIx]);
 
   useEffect(() => {
     setStepIx(0);
@@ -218,8 +264,18 @@ export function App(): JSX.Element {
       <div className="topbar">
         <h1>infer-tutor</h1>
         <div className="algo-picker">
-          {(["W", "W-prime"] as Algorithm[]).map((a) => (
-            <label key={a} className={"algo-option" + (algorithm === a ? " selected" : "")}>
+          {(["W", "W-prime", "M"] as Algorithm[]).map((a) => (
+            <label
+              key={a}
+              className={"algo-option" + (algorithm === a ? " selected" : "")}
+              title={
+                a === "W"
+                  ? "Algorithm W — bottom-up HM inference. Synthesises types upward; substitutions composed as you go."
+                  : a === "W-prime"
+                  ? "Algorithm W′ — constraint-based HM inference. Separates constraint generation from solving."
+                  : "Algorithm M — top-down HM inference. Passes an expected type down into each node and unifies on the spot."
+              }
+            >
               <input
                 type="radio"
                 name="algorithm"
@@ -227,7 +283,7 @@ export function App(): JSX.Element {
                 checked={algorithm === a}
                 onChange={() => setAlgorithm(a)}
               />
-              {a === "W" ? "Algorithm W" : "Algorithm W′"}
+              {a === "W" ? "W" : a === "W-prime" ? "W′" : "M"}
             </label>
           ))}
         </div>
@@ -260,6 +316,7 @@ export function App(): JSX.Element {
                   lamBodyTypes={currentStep.lamBodyTypes}
                   letBodyTypes={currentStep.letBodyTypes}
                   varSchemes={currentStep.varSchemes}
+                  expectedTypes={currentStep.expectedTypes}
                   focusId={astFocusId}
                   secondaryId={astSecondaryId}
                 />
@@ -295,7 +352,7 @@ export function App(): JSX.Element {
           <div className="panel" style={{ flex: 1 }}>
             <div className="panel-header">Environment</div>
             <div className="panel-body">
-              {currentStep && <EnvPanel env={currentStep.env} highlight={lookupName} />}
+              {currentStep && <EnvPanel env={currentStep.env} highlight={envHighlight} />}
             </div>
           </div>
           <div className="panel" style={{ flex: 1 }}>
@@ -309,7 +366,11 @@ export function App(): JSX.Element {
             </div>
             <div className="panel-body">
               {currentStep && (
-                <SubstPanel subst={currentStep.subst} liveVars={liveVars} />
+                <SubstPanel
+                  subst={currentStep.subst}
+                  liveVars={liveVars}
+                  highlights={substHighlights}
+                />
               )}
             </div>
           </div>
@@ -320,7 +381,7 @@ export function App(): JSX.Element {
                 <div>
                   <div style={{ color: "var(--accent-2)", marginBottom: 6 }}>{currentStep.kind}</div>
                   <div>{currentStep.message}</div>
-                  {(currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter") && parseResult.expr && (
+                  {(currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter" || currentStep.kind === "check-enter") && parseResult.expr && (
                     <div className="expr-focus" style={{ marginTop: 10 }}>
                       <ExprFocusView expr={parseResult.expr} focusId={focusId} />
                     </div>

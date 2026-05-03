@@ -8,6 +8,7 @@ export type StepKind =
   | "unify-success"
   | "unify-fail"
   | "bind-var"
+  | "subst-compose"     // applying a new binding into the RHS of existing σ entries
   | "lookup"
   | "instantiate"
   | "generalize"
@@ -21,7 +22,10 @@ export type StepKind =
   | "gen-exit"          // leaving a node during constraint generation
   | "emit-constraint"   // record a new constraint (deferred unification)
   | "solve-phase"       // transition from generation to solving
-  | "solve-constraint"; // begin solving one constraint
+  | "solve-constraint"  // begin solving one constraint
+  // M only:
+  | "check-enter"       // entering a node with an expected type (top-down)
+  | "check-exit";       // leaving a node after checking against expected type
 
 // A constraint is an equation between two types that must be satisfied.
 // W' collects these during generation, then solves them in a separate phase.
@@ -62,6 +66,10 @@ export type Step = {
   // full looked-up scheme (e.g. `forall t0. t0 -> t0`); cleared at
   // instantiate so the freshly-renamed type takes over.
   varSchemes: Map<NodeId, Scheme>;
+  // M only: the expected type passed down to each node. Set at check-enter,
+  // cleared at check-exit. Lets the AST view show "⇐ T" before the actual
+  // type is known, making M's top-down flow visible.
+  expectedTypes: Map<NodeId, Type>;
   // Every fresh type variable introduced by the algorithm so far. The UI
   // computes the "still open" set as introducedVars \ subst.keys().
   introducedVars: Set<TVarName>;
@@ -69,7 +77,7 @@ export type Step = {
   detail?:
     | { left: Type; right: Type }
     | { name: string; type: Type }
-    | { input: Type; output: Type };
+    | { input: Type; output: Type; where?: string };
   // W' only (empty arrays for W):
   constraints: Constraint[];
   solvedConstraintIds: number[];

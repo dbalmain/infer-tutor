@@ -15,6 +15,7 @@ type Props = {
   lamBodyTypes: Map<NodeId, Type>;
   letBodyTypes: Map<NodeId, Type>;
   varSchemes: Map<NodeId, Scheme>;
+  expectedTypes: Map<NodeId, Type>;
   focusId?: NodeId;
   secondaryId?: NodeId;
 };
@@ -56,10 +57,17 @@ function renderLabelAndType(e: Expr, ctx: Props): JSX.Element {
     // Use lamBodyTypes (set at body's infer-exit) rather than the body
     // node's own type — those update at different times.
     const bodyT = ctx.lamBodyTypes.get(e.id);
+    const expected = ctx.expectedTypes.get(e.id);
+    const nodeType = ctx.nodeTypes.get(e.id);
     return (
-      <span className="ast-label">
-        \({e.param} : <Slot t={paramT} />) -&gt; <Slot t={bodyT} />
-      </span>
+      <>
+        <span className="ast-label">
+          \({e.param} : <Slot t={paramT} />) -&gt; <Slot t={bodyT} />
+        </span>
+        {!nodeType && expected && (
+          <span className="ast-type ast-expected"> ⇐ {showType(expected)}</span>
+        )}
+      </>
     );
   }
 
@@ -68,10 +76,17 @@ function renderLabelAndType(e: Expr, ctx: Props): JSX.Element {
   if (e.kind === "Let") {
     const sc = ctx.bindingSchemes.get(e.id);
     const bodyT = ctx.letBodyTypes.get(e.id);
+    const expected = ctx.expectedTypes.get(e.id);
+    const nodeType = ctx.nodeTypes.get(e.id);
     return (
-      <span className="ast-label">
-        let {e.name} : <SchemeSlot sc={sc} /> in <Slot t={bodyT} />
-      </span>
+      <>
+        <span className="ast-label">
+          let {e.name} : <SchemeSlot sc={sc} /> in <Slot t={bodyT} />
+        </span>
+        {!nodeType && expected && (
+          <span className="ast-type ast-expected"> ⇐ {showType(expected)}</span>
+        )}
+      </>
     );
   }
 
@@ -80,21 +95,32 @@ function renderLabelAndType(e: Expr, ctx: Props): JSX.Element {
   if (e.kind === "Var") {
     const sc = ctx.varSchemes.get(e.id);
     if (sc) {
+      const expected = ctx.expectedTypes.get(e.id);
       return (
         <>
           <span className="ast-label">{e.name}</span>{" "}
           <span className="ast-type">: {showScheme(sc)}</span>
+          {expected && <span className="ast-type ast-expected"> ⇐ {showType(expected)}</span>}
         </>
       );
     }
   }
 
   const display = ctx.nodeTypes.get(e.id);
+  const expected = ctx.expectedTypes.get(e.id);
+  // When both are present the node type has been set (e.g. at instantiate)
+  // but unification hasn't finished yet. Show both until they agree.
+  const showExpected = expected && (!display || showType(display) !== showType(expected));
   return (
     <>
       <span className="ast-label">{nodeLabel(e)}</span>{" "}
       {display ? (
-        <span className="ast-type">: {showType(display)}</span>
+        <>
+          <span className="ast-type">: {showType(display)}</span>
+          {showExpected && <span className="ast-type ast-expected"> ⇐ {showType(expected!)}</span>}
+        </>
+      ) : showExpected ? (
+        <span className="ast-type ast-expected">⇐ {showType(expected!)}</span>
       ) : (
         <span className="ast-type unknown">: ?</span>
       )}

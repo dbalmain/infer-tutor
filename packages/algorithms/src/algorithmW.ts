@@ -57,6 +57,7 @@ class Tracer {
       lamBodyTypes: cloneNodeTypes(this.lamBodyTypes),
       letBodyTypes: cloneNodeTypes(this.letBodyTypes),
       varSchemes: new Map(this.varSchemes),
+      expectedTypes: new Map(),
       introducedVars: new Set(this.introducedVars),
       message: args.message,
       detail: args.detail,
@@ -116,7 +117,7 @@ class Tracer {
       message: noop
         ? `apply σ to ${showType(args.input)} (${args.where}, no change)`
         : `apply σ to ${showType(args.input)} ⇒ ${showType(args.output)} (${args.where})`,
-      detail: { input: args.input, output: args.output },
+      detail: { input: args.input, output: args.output, where: args.where },
     });
   }
 }
@@ -143,15 +144,32 @@ function unifyOpts(tr: Tracer, env: Env, nodeId?: NodeId): UnifyOpts {
         detail: { left: t1, right: t2 },
       });
     },
-    onBind: (varName, t, substAfter) => {
+    onBind: (varName, t, substBefore, substAfter) => {
+      const rawSubst: Subst = new Map(substBefore);
+      rawSubst.set(varName, t);
       tr.push({
         kind: "bind-var",
         nodeId,
         env,
-        subst: substAfter,
+        subst: rawSubst,
         message: `bind ${varName} ↦ ${showType(t)}`,
         detail: { name: varName, type: t },
       });
+      let changed = false;
+      for (const [k, v] of substBefore) {
+        const after = substAfter.get(k);
+        if (after && !typeEquals(v, after)) { changed = true; break; }
+      }
+      if (changed) {
+        tr.push({
+          kind: "subst-compose",
+          nodeId,
+          env,
+          subst: substAfter,
+          message: `compose: apply ${varName} ↦ ${showType(t)} to existing σ entries`,
+          detail: { name: varName, type: t },
+        });
+      }
     },
   };
 }

@@ -13,6 +13,21 @@ export function StepExplanation({ step }: { step: Step }): JSX.Element | null {
 
 function explain(step: Step): JSX.Element | null {
   switch (step.kind) {
+    case "check-enter": {
+      const isRoot = step.message.includes("root expression");
+      return (
+        <p>
+          <strong>Check: entering node.</strong>{" "}
+          Algorithm M passes an <em>expected type</em> down into each node
+          (shown as <code>⇐ T</code> in the AST panel).
+          Rather than synthesising a type and returning it,{" "}
+          {isRoot
+            ? "the root starts with a fresh unknown as the root expected type."
+            : "this node must produce the expected type shown above — any mismatch is caught by immediate unification."}
+        </p>
+      );
+    }
+
     case "infer-enter": {
       const isRoot = step.message.startsWith("infer root expression:");
       return (
@@ -57,6 +72,26 @@ function explain(step: Step): JSX.Element | null {
         </>
       );
 
+    case "check-exit":
+      return (
+        <>
+          <p>
+            <strong>Check: leaving node.</strong>{" "}
+            The substitution shown here has grown since <code>check-enter</code>:
+            it contains any variable bindings discovered inside this check (e.g.{" "}
+            <code>t3 ↦ t2</code> from unifying an instantiated type with the
+            expected type).
+          </p>
+          <p>
+            The parent will now apply this substitution to its own pending
+            types — for example, resolving the lambda's expected type{" "}
+            <code>t1</code> to <code>t2 → t2</code>. Those applications
+            appear as the next few <code>subst-apply</code> steps before
+            the parent's own <code>check-exit</code>.
+          </p>
+        </>
+      );
+
     case "infer-exit":
       return (
         <p>
@@ -77,7 +112,25 @@ function explain(step: Step): JSX.Element | null {
         </p>
       );
 
-    case "fresh-param":
+    case "fresh-param": {
+      const isAlgoM = step.message.includes("decomposing expected type");
+      if (isAlgoM) {
+        return (
+          <>
+            <p>
+              Algorithm M knows the <em>expected type</em> of this lambda
+              (from the parent). To discover the parameter and body types,
+              it introduces two fresh variables and immediately unifies the
+              expected type with <code>α → β</code>.
+            </p>
+            <p>
+              This is the top-down counterpart of W's fresh-param: instead of
+              inventing a placeholder and waiting for the body to constrain it,
+              M demands the expected function type up front.
+            </p>
+          </>
+        );
+      }
       return (
         <>
           <p>
@@ -92,8 +145,28 @@ function explain(step: Step): JSX.Element | null {
           </p>
         </>
       );
+    }
 
-    case "fresh-app":
+    case "fresh-app": {
+      const isAlgoM = step.message.startsWith("fresh") && step.message.includes("argument;");
+      if (isAlgoM) {
+        return (
+          <>
+            <p>
+              Algorithm M already knows the <em>result</em> type (it's the
+              expected type passed in from the parent). What it doesn't know
+              yet is the <em>argument</em> type, so it invents a fresh
+              variable for that.
+            </p>
+            <p>
+              The function is then checked against{" "}
+              <code>freshArg → expectedResult</code>, and the argument
+              against <code>σ(freshArg)</code> after the function check
+              has possibly bound <code>freshArg</code>.
+            </p>
+          </>
+        );
+      }
       return (
         <>
           <p>
@@ -109,6 +182,7 @@ function explain(step: Step): JSX.Element | null {
           </p>
         </>
       );
+    }
 
     case "lookup": {
       const name =
@@ -262,6 +336,31 @@ function explain(step: Step): JSX.Element | null {
             variable appears inside the type we'd bind it to, we'd be
             asking for an infinite type — so we refuse and raise a type
             error. (That's the failure mode of <code>\x -&gt; x x</code>.)
+          </p>
+          <p>
+            σ on the right shows the new binding inserted alongside the
+            existing entries. If any of those existing RHS still mention
+            the just-bound variable, the next step
+            (<code>subst-compose</code>) rewrites them to keep σ
+            idempotent.
+          </p>
+        </>
+      );
+
+    case "subst-compose":
+      return (
+        <>
+          <p>
+            <strong>Compose into σ.</strong> Adding a new binding to the
+            substitution isn't just an insert. The new mapping must also
+            be applied to the right-hand side of every existing entry —
+            otherwise σ wouldn't be idempotent (applying it once vs.
+            twice could give different answers).
+          </p>
+          <p>
+            In the previous step, σ contained the new binding next to
+            unchanged old entries. Now those old entries' RHS have been
+            rewritten through the new binding.
           </p>
         </>
       );

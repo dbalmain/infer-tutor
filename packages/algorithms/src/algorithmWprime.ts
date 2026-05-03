@@ -69,6 +69,7 @@ class WPrimeTracer {
       lamBodyTypes: new Map(this.lamBodyTypes),
       letBodyTypes: new Map(this.letBodyTypes),
       varSchemes: new Map(this.varSchemes),
+      expectedTypes: new Map(),
       introducedVars: new Set(this.introducedVars),
       message: args.message,
       detail: args.detail,
@@ -159,7 +160,7 @@ function makeUnifyOpts(tr: WPrimeTracer, env: Env, nodeId?: NodeId): UnifyOpts {
         message: noop
           ? `apply σ to ${showType(input)} (no change)`
           : `apply σ to ${showType(input)} ⇒ ${showType(output)}`,
-        detail: { input, output },
+        detail: { input, output, where: "top of unify" },
       });
     },
     onRecurse: (side, t1, t2, subst) => {
@@ -172,15 +173,32 @@ function makeUnifyOpts(tr: WPrimeTracer, env: Env, nodeId?: NodeId): UnifyOpts {
         detail: { left: t1, right: t2 },
       });
     },
-    onBind: (varName, t, substAfter) => {
+    onBind: (varName, t, substBefore, substAfter) => {
+      const rawSubst: Subst = new Map(substBefore);
+      rawSubst.set(varName, t);
       tr.push({
         kind: "bind-var",
         nodeId,
         env,
-        subst: substAfter,
+        subst: rawSubst,
         message: `bind ${varName} ↦ ${showType(t)}`,
         detail: { name: varName, type: t },
       });
+      let changed = false;
+      for (const [k, v] of substBefore) {
+        const after = substAfter.get(k);
+        if (after && !typeEquals(v, after)) { changed = true; break; }
+      }
+      if (changed) {
+        tr.push({
+          kind: "subst-compose",
+          nodeId,
+          env,
+          subst: substAfter,
+          message: `compose: apply ${varName} ↦ ${showType(t)} to existing σ entries`,
+          detail: { name: varName, type: t },
+        });
+      }
     },
   };
 }

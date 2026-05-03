@@ -21,7 +21,10 @@ export class UnifyError extends Error {
 export type UnifyOpts = {
   onApplySubst?: (input: Type, output: Type, subst: Subst) => void;
   onRecurse?: (side: "left" | "right", t1: Type, t2: Type, subst: Subst) => void;
-  onBind?: (varName: TVarName, t: Type, substAfter: Subst) => void;
+  // substBefore is σ before this bind; substAfter is the result of
+  // composeSubst({varName↦t}, substBefore). The composition step is what
+  // updates the RHS of existing entries that mention varName.
+  onBind?: (varName: TVarName, t: Type, substBefore: Subst, substAfter: Subst) => void;
 };
 
 // Unify two types under the running substitution `s`. Returns the *composed*
@@ -39,12 +42,12 @@ export function unify(
   if (a.kind === "TVar" && b.kind === "TVar" && a.name === b.name) return s;
   if (a.kind === "TVar") {
     const next = composeSubst(bind(a.name, b), s);
-    if (next !== s) opts.onBind?.(a.name, b, next);
+    if (next !== s) opts.onBind?.(a.name, b, s, next);
     return next;
   }
   if (b.kind === "TVar") {
     const next = composeSubst(bind(b.name, a), s);
-    if (next !== s) opts.onBind?.(b.name, a, next);
+    if (next !== s) opts.onBind?.(b.name, a, s, next);
     return next;
   }
   if (a.kind === "TCon" && b.kind === "TCon" && a.name === b.name) return s;
