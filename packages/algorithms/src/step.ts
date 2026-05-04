@@ -3,6 +3,8 @@ import type { Env, NodeId, Scheme, Subst, TVarName, Type } from "@infer-tutor/la
 export type StepKind =
   | "infer-enter"
   | "infer-exit"
+  | "synth-enter"       // BD: synthesize a type upward
+  | "synth-exit"
   | "unify-enter"
   | "unify-recurse"
   | "unify-success"
@@ -12,6 +14,7 @@ export type StepKind =
   | "lookup"
   | "instantiate"
   | "generalize"
+  | "use-annot"         // BD: consume a programmer-written type annotation
   | "fresh-param"
   | "fresh-app"
   | "subst-apply"
@@ -77,7 +80,8 @@ export type Step = {
   detail?:
     | { left: Type; right: Type }
     | { name: string; type: Type }
-    | { input: Type; output: Type; where?: string };
+    | { input: Type; output: Type; where?: string }
+    | { origin: "check-fallback" };
   // W' only (empty arrays for W):
   constraints: Constraint[];
   solvedConstraintIds: number[];

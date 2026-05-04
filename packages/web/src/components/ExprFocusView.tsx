@@ -1,4 +1,4 @@
-import { type Expr, type NodeId } from "@infer-tutor/lang";
+import { type Expr, type NodeId, showType } from "@infer-tutor/lang";
 
 export type FocusMode = "default" | "enter" | "exit";
 
@@ -50,7 +50,8 @@ function renderExpr(
     case "Lam":
       return (
         <span className={cls}>
-          \{e.param} -&gt; {renderExpr(e.body, focusId, focused, mode)}
+          {e.paramAnn ? `\\(${e.param} : ${showType(e.paramAnn)})` : `\\${e.param}`} -&gt;{" "}
+          {renderExpr(e.body, focusId, focused, mode)}
         </span>
       );
     case "App":

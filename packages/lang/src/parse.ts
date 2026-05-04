@@ -1,5 +1,6 @@
 import type { Expr, NodeId } from "./ast";
 import { type Token, lex } from "./lex";
+import { tBool, tFun, tInt, type Type } from "./types";
 
 export class ParseError extends Error {
   constructor(message: string, public pos: number) {
@@ -50,21 +51,35 @@ class Parser {
 
   private parseLam(): Expr {
     this.expectSym("\\");
-    const params: string[] = [];
+    const params: { name: string; ann?: Type }[] = [];
     while (true) {
       const t = this.peek();
       if (t.kind === "ident") {
-        params.push(t.value);
+        params.push({ name: t.value });
         this.eat();
+      } else if (t.kind === "sym" && t.value === "(") {
+        params.push(this.parseAnnotatedParam());
       } else break;
     }
     if (params.length === 0) throw new ParseError("expected parameter after '\\\\'", this.peek().pos);
     this.expectSym("->");
     let body = this.parseExpr();
     for (let k = params.length - 1; k >= 0; k--) {
-      body = { kind: "Lam", id: this.id(), param: params[k]!, body };
+      const param = params[k]!;
+      body = { kind: "Lam", id: this.id(), param: param.name, paramAnn: param.ann, body };
     }
     return body;
+  }
+
+  private parseAnnotatedParam(): { name: string; ann?: Type } {
+    this.expectSym("(");
+    const name = this.peek();
+    if (name.kind !== "ident") throw new ParseError("expected parameter name", name.pos);
+    this.eat();
+    this.expectSym(":");
+    const ann = this.parseType();
+    this.expectSym(")");
+    return { name: name.value, ann };
   }
 
   private parseLet(): Expr {
@@ -142,6 +157,33 @@ class Parser {
       return e;
     }
     throw new ParseError(`unexpected ${describe(t)}`, t.pos);
+  }
+
+  private parseType(): Type {
+    const from = this.parseTypeAtom();
+    const t = this.peek();
+    if (t.kind === "sym" && t.value === "->") {
+      this.eat();
+      return tFun(from, this.parseType());
+    }
+    return from;
+  }
+
+  private parseTypeAtom(): Type {
+    const t = this.peek();
+    if (t.kind === "ident") {
+      this.eat();
+      if (t.value === "Int") return tInt;
+      if (t.value === "Bool") return tBool;
+      throw new ParseError(`unknown type ${JSON.stringify(t.value)}`, t.pos);
+    }
+    if (t.kind === "sym" && t.value === "(") {
+      this.eat();
+      const ty = this.parseType();
+      this.expectSym(")");
+      return ty;
+    }
+    throw new ParseError("expected type", t.pos);
   }
 }
 

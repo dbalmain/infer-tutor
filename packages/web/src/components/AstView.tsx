@@ -16,6 +16,7 @@ type Props = {
   letBodyTypes: Map<NodeId, Type>;
   varSchemes: Map<NodeId, Scheme>;
   expectedTypes: Map<NodeId, Type>;
+  forceExpectedIds?: Set<NodeId>;
   focusId?: NodeId;
   secondaryId?: NodeId;
 };
@@ -62,7 +63,7 @@ function renderLabelAndType(e: Expr, ctx: Props): JSX.Element {
     return (
       <>
         <span className="ast-label">
-          \({e.param} : <Slot t={paramT} />) -&gt; <Slot t={bodyT} />
+          \({e.param} : <Slot t={paramT ?? e.paramAnn} />) -&gt; <Slot t={bodyT} />
         </span>
         {!nodeType && expected && (
           <span className="ast-type ast-expected"> ⇐ {showType(expected)}</span>
@@ -108,9 +109,11 @@ function renderLabelAndType(e: Expr, ctx: Props): JSX.Element {
 
   const display = ctx.nodeTypes.get(e.id);
   const expected = ctx.expectedTypes.get(e.id);
+  const forceExpected = ctx.forceExpectedIds?.has(e.id) ?? false;
   // When both are present the node type has been set (e.g. at instantiate)
   // but unification hasn't finished yet. Show both until they agree.
-  const showExpected = expected && (!display || showType(display) !== showType(expected));
+  const showExpected =
+    expected && (!display || forceExpected || showType(display) !== showType(expected));
   return (
     <>
       <span className="ast-label">{nodeLabel(e)}</span>{" "}

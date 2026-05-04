@@ -54,6 +54,17 @@ function explain(step: Step): JSX.Element | null {
       );
     }
 
+    case "synth-enter":
+      return (
+        <p>
+          <strong>Synthesis: entering node.</strong>{" "}
+          Bidirectional checking first asks whether this expression can
+          produce a type on its own. Variables, literals, applications,
+          lets, and annotated lambdas can synthesize; bare lambdas usually
+          need an expected function type and are handled by checking.
+        </p>
+      );
+
     case "env-extend":
       return (
         <>
@@ -109,6 +120,27 @@ function explain(step: Step): JSX.Element | null {
           for this subexpression have been emitted. The type shown may still
           be a fresh variable — it will be resolved once the solve phase works
           through the constraint list.
+        </p>
+      );
+
+    case "synth-exit":
+      return (
+        <p>
+          <strong>Synthesis: leaving node.</strong>{" "}
+          This expression has produced a type upward. A parent can now use
+          that synthesized type directly, or compare it with an expected
+          type in a checking rule.
+        </p>
+      );
+
+    case "use-annot":
+      return (
+        <p>
+          <strong>Use annotation.</strong>{" "}
+          In bidirectional mode, this programmer-written annotation gives
+          the lambda enough information to synthesize a function type. We
+          add the parameter to the environment with that type before
+          synthesizing the body.
         </p>
       );
 

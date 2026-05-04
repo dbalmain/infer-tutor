@@ -5,15 +5,20 @@ import {
   type Scheme,
   type TVarName,
   type Type,
+  applySubstType,
   buildParentMap,
   freeTypeVars,
   freeTypeVarsScheme,
   parse,
   ParseError,
+  showExpr,
+  showType,
+  tBool,
+  tInt,
   typeEquals,
   children,
 } from "@infer-tutor/lang";
-import { defaultEnv, inferW, inferWprime, inferM, type InferResult, type Step } from "@infer-tutor/algorithms";
+import { defaultEnv, inferW, inferWprime, inferM, inferBD, type InferResult, type Step } from "@infer-tutor/algorithms";
 import { AstView } from "./components/AstView";
 import { ConstraintsPanel } from "./components/ConstraintsPanel";
 import { EnvPanel } from "./components/EnvPanel";
@@ -71,7 +76,127 @@ function buildNodeMap(root: Expr): Map<NodeId, Expr> {
   return out;
 }
 
-type Algorithm = "W" | "W-prime" | "M";
+function hasLambdaParamAnnotation(root: Expr): boolean {
+  if (root.kind === "Lam" && root.paramAnn) return true;
+  return children(root).some(hasLambdaParamAnnotation);
+}
+
+function stripLambdaParamAnnotations(root: Expr): Expr {
+  switch (root.kind) {
+    case "Lam":
+      return { kind: "Lam", id: root.id, param: root.param, body: stripLambdaParamAnnotations(root.body) };
+    case "App":
+      return { ...root, fn: stripLambdaParamAnnotations(root.fn), arg: stripLambdaParamAnnotations(root.arg) };
+    case "Let":
+      return { ...root, value: stripLambdaParamAnnotations(root.value), body: stripLambdaParamAnnotations(root.body) };
+    case "If":
+      return {
+        ...root,
+        cond: stripLambdaParamAnnotations(root.cond),
+        then: stripLambdaParamAnnotations(root.then),
+        else: stripLambdaParamAnnotations(root.else),
+      };
+    default:
+      return root;
+  }
+}
+
+function unannotatedLambdaIds(root: Expr): NodeId[] {
+  const ids: NodeId[] = [];
+  const walk = (e: Expr) => {
+    if (e.kind === "Lam" && !e.paramAnn) ids.push(e.id);
+    for (const child of children(e)) walk(child);
+  };
+  walk(root);
+  return ids;
+}
+
+function annotateLambdaParams(root: Expr, anns: Map<NodeId, Type>): Expr {
+  switch (root.kind) {
+    case "Lam":
+      return {
+        kind: "Lam",
+        id: root.id,
+        param: root.param,
+        paramAnn: root.paramAnn ?? anns.get(root.id),
+        body: annotateLambdaParams(root.body, anns),
+      };
+    case "App":
+      return { ...root, fn: annotateLambdaParams(root.fn, anns), arg: annotateLambdaParams(root.arg, anns) };
+    case "Let":
+      return { ...root, value: annotateLambdaParams(root.value, anns), body: annotateLambdaParams(root.body, anns) };
+    case "If":
+      return {
+        ...root,
+        cond: annotateLambdaParams(root.cond, anns),
+        then: annotateLambdaParams(root.then, anns),
+        else: annotateLambdaParams(root.else, anns),
+      };
+    default:
+      return root;
+  }
+}
+
+function finalType(result: InferResult): Type {
+  return applySubstType(result.subst, result.type);
+}
+
+function maybeAnnotateForBD(src: string): string | undefined {
+  let expr: Expr;
+  try {
+    expr = parse(src);
+  } catch {
+    return undefined;
+  }
+  if (hasLambdaParamAnnotation(expr)) return undefined;
+
+  const hm = inferW(defaultEnv(), expr);
+  if (hm.error) return undefined;
+  const targetType = showType(finalType(hm));
+  const lambdaIds = unannotatedLambdaIds(expr);
+  if (lambdaIds.length === 0 || lambdaIds.length > 6) return undefined;
+
+  const candidates = [tInt, tBool];
+  const assignments = new Map<NodeId, Type>();
+  const search = (ix: number): string | undefined => {
+    if (ix === lambdaIds.length) {
+      const annotated = annotateLambdaParams(expr, assignments);
+      const bd = inferBD(defaultEnv(), annotated);
+      if (bd.error || showType(finalType(bd)) !== targetType) return undefined;
+      return showExpr(annotated);
+    }
+    const id = lambdaIds[ix]!;
+    for (const candidate of candidates) {
+      assignments.set(id, candidate);
+      const result = search(ix + 1);
+      if (result) return result;
+    }
+    assignments.delete(id);
+    return undefined;
+  };
+  return search(0);
+}
+
+function maybeStripForHM(src: string, next: Exclude<Algorithm, "BD">): string | undefined {
+  let expr: Expr;
+  try {
+    expr = parse(src);
+  } catch {
+    return undefined;
+  }
+  if (!hasLambdaParamAnnotation(expr)) return undefined;
+  const stripped = stripLambdaParamAnnotations(expr);
+  const result =
+    next === "W"
+      ? inferW(defaultEnv(), stripped)
+      : next === "W-prime"
+      ? inferWprime(defaultEnv(), stripped)
+      : inferM(defaultEnv(), stripped);
+  if (result.error) return undefined;
+  return showExpr(stripped);
+}
+
+type Algorithm = "W" | "W-prime" | "M" | "BD";
 
 export function App(): JSX.Element {
   const [src, setSrc] = useState(DEFAULT_EXPR);
@@ -91,9 +216,18 @@ export function App(): JSX.Element {
 
   const inferResult = useMemo<InferResult | undefined>(() => {
     if (!parseResult.expr) return undefined;
+    if (algorithm !== "BD" && hasLambdaParamAnnotation(parseResult.expr)) {
+      return {
+        type: { kind: "TVar", name: "?" },
+        subst: new Map(),
+        steps: [],
+        error: "lambda parameter annotations are currently supported only in bidirectional mode",
+      };
+    }
     if (algorithm === "W") return inferW(defaultEnv(), parseResult.expr);
     if (algorithm === "W-prime") return inferWprime(defaultEnv(), parseResult.expr);
-    return inferM(defaultEnv(), parseResult.expr);
+    if (algorithm === "M") return inferM(defaultEnv(), parseResult.expr);
+    return inferBD(defaultEnv(), parseResult.expr);
   }, [parseResult.expr, algorithm]);
 
   const parentMap = useMemo<Map<NodeId, Expr>>(() => {
@@ -156,10 +290,17 @@ export function App(): JSX.Element {
     ) {
       astFocusId = nid;
       astSecondaryId = focusedExpr.arg.id;
-    } else if ((currentStep.kind === "infer-exit" || currentStep.kind === "gen-exit" || currentStep.kind === "check-exit") && parent) {
+    } else if (
+      (currentStep.kind === "synth-enter" || currentStep.kind === "synth-exit") &&
+      currentStep.detail &&
+      "origin" in currentStep.detail &&
+      currentStep.detail.origin === "check-fallback"
+    ) {
+      astFocusId = nid;
+    } else if ((currentStep.kind === "infer-exit" || currentStep.kind === "gen-exit" || currentStep.kind === "check-exit" || currentStep.kind === "synth-exit") && parent) {
       astFocusId = parent.id;
       astSecondaryId = nid;
-    } else if ((currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter" || currentStep.kind === "check-enter") && parent) {
+    } else if ((currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter" || currentStep.kind === "check-enter" || currentStep.kind === "synth-enter") && parent) {
       astFocusId = nid;
       astSecondaryId = parent.id;
     } else {
@@ -173,6 +314,32 @@ export function App(): JSX.Element {
     if (!currentStep) return new Set<TVarName>();
     return computeLiveVars(currentStep);
   }, [currentStep]);
+  const forceExpectedIds = useMemo(() => {
+    const out = new Set<NodeId>();
+    if (!currentStep || currentStep.nodeId === undefined) return out;
+    if (algorithm === "BD") {
+      for (const id of currentStep.expectedTypes.keys()) {
+        if (
+          id === currentStep.nodeId &&
+          (currentStep.kind === "unify-success" || currentStep.kind === "check-exit")
+        ) {
+          continue;
+        }
+        out.add(id);
+      }
+    }
+    if (
+      (currentStep.kind === "synth-enter" || currentStep.kind === "synth-exit") &&
+      currentStep.detail &&
+      "origin" in currentStep.detail &&
+      currentStep.detail.origin === "check-fallback"
+    ) {
+      out.add(currentStep.nodeId);
+    } else if (currentStep.kind === "unify-enter") {
+      out.add(currentStep.nodeId);
+    }
+    return out;
+  }, [currentStep, algorithm]);
   const freeVars = useMemo(() => {
     if (!currentStep) return [] as TVarName[];
     const result: TVarName[] = [];
@@ -259,12 +426,27 @@ export function App(): JSX.Element {
     setSubmitted(src);
   }
 
+  function changeAlgorithm(next: Algorithm): void {
+    let nextSrc: string | undefined;
+    if (next === "BD" && algorithm !== "BD") {
+      nextSrc = maybeAnnotateForBD(src);
+    } else if (next !== "BD" && algorithm === "BD") {
+      nextSrc = maybeStripForHM(src, next);
+    }
+
+    if (nextSrc) {
+      setSrc(nextSrc);
+      setSubmitted(nextSrc);
+    }
+    setAlgorithm(next);
+  }
+
   return (
     <div className="app">
       <div className="topbar">
         <h1>infer-tutor</h1>
         <div className="algo-picker">
-          {(["W", "W-prime", "M"] as Algorithm[]).map((a) => (
+          {(["W", "W-prime", "M", "BD"] as Algorithm[]).map((a) => (
             <label
               key={a}
               className={"algo-option" + (algorithm === a ? " selected" : "")}
@@ -273,7 +455,9 @@ export function App(): JSX.Element {
                   ? "Algorithm W — bottom-up HM inference. Synthesises types upward; substitutions composed as you go."
                   : a === "W-prime"
                   ? "Algorithm W′ — constraint-based HM inference. Separates constraint generation from solving."
-                  : "Algorithm M — top-down HM inference. Passes an expected type down into each node and unifies on the spot."
+                  : a === "M"
+                  ? "Algorithm M — top-down HM inference. Passes an expected type down into each node and unifies on the spot."
+                  : "Bidirectional — synthesises where possible and checks lambdas against annotations or expected function types."
               }
             >
               <input
@@ -281,9 +465,9 @@ export function App(): JSX.Element {
                 name="algorithm"
                 value={a}
                 checked={algorithm === a}
-                onChange={() => setAlgorithm(a)}
+                onChange={() => changeAlgorithm(a)}
               />
-              {a === "W" ? "W" : a === "W-prime" ? "W′" : "M"}
+              {a === "W" ? "W" : a === "W-prime" ? "W′" : a}
             </label>
           ))}
         </div>
@@ -317,6 +501,7 @@ export function App(): JSX.Element {
                   letBodyTypes={currentStep.letBodyTypes}
                   varSchemes={currentStep.varSchemes}
                   expectedTypes={currentStep.expectedTypes}
+                  forceExpectedIds={forceExpectedIds}
                   focusId={astFocusId}
                   secondaryId={astSecondaryId}
                 />
@@ -381,7 +566,7 @@ export function App(): JSX.Element {
                 <div>
                   <div style={{ color: "var(--accent-2)", marginBottom: 6 }}>{currentStep.kind}</div>
                   <div>{currentStep.message}</div>
-                  {(currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter" || currentStep.kind === "check-enter") && parseResult.expr && (
+                  {(currentStep.kind === "infer-enter" || currentStep.kind === "gen-enter" || currentStep.kind === "check-enter" || currentStep.kind === "synth-enter") && parseResult.expr && (
                     <div className="expr-focus" style={{ marginTop: 10 }}>
                       <ExprFocusView expr={parseResult.expr} focusId={focusId} />
                     </div>

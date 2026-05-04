@@ -6,7 +6,7 @@ export type Token =
   | { kind: "eof"; pos: number };
 
 export type Keyword = "let" | "in" | "if" | "then" | "else" | "True" | "False";
-export type Symbol_ = "(" | ")" | "\\" | "->" | "=";
+export type Symbol_ = "(" | ")" | "\\" | "->" | "=" | ":";
 
 const KEYWORDS = new Set<string>(["let", "in", "if", "then", "else", "True", "False"]);
 
@@ -25,7 +25,7 @@ export function lex(src: string): Token[] {
       i++;
       continue;
     }
-    if (c === "(" || c === ")" || c === "\\" || c === "=") {
+    if (c === "(" || c === ")" || c === "\\" || c === "=" || c === ":") {
       out.push({ kind: "sym", value: c as Symbol_, pos: i });
       i++;
       continue;

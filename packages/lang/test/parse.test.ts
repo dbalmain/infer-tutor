@@ -11,6 +11,14 @@ describe("parser", () => {
   test("lambda", () => {
     expect(showExpr(parse("\\x -> x"))).toBe("\\x -> x");
   });
+  test("annotated lambda parameter", () => {
+    expect(showExpr(parse("\\(x : Int) -> x"))).toBe("\\(x : Int) -> x");
+  });
+  test("function type annotation is right-associative", () => {
+    expect(showExpr(parse("\\(f : Int -> Int -> Int) -> f"))).toBe(
+      "\\(f : Int -> Int -> Int) -> f",
+    );
+  });
   test("multi-arg lambda desugars", () => {
     expect(showExpr(parse("\\x y -> x"))).toBe("\\x -> \\y -> x");
   });
