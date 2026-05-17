@@ -1,14 +1,9 @@
 import {
   type Env,
   type Expr,
-  type NodeId,
-  type Scheme,
   type Subst,
-  type TVarName,
   type Type,
-  type UnifyOpts,
   applySubstEnv,
-  applySubstScheme,
   applySubstType,
   emptySubst,
   FreshSupply,
@@ -20,11 +15,18 @@ import {
   tBool,
   tFun,
   tInt,
-  typeEquals,
   unify,
   UnifyError,
 } from "@infer-tutor/lang";
-import type { Constraint, InferResult, Step, StepKind } from "./step";
+import type { Constraint, InferResult } from "./step";
+import {
+  Tracer,
+  errorResult,
+  finalize,
+  freshTV,
+  makeUnifyOpts,
+  truncate,
+} from "./tracer";
 
 // W' separates type inference into two phases:
 //   1. Generation: walk the AST, assign fresh TVars, emit equality constraints.
@@ -35,180 +37,12 @@ import type { Constraint, InferResult, Step, StepKind } from "./step";
 // generalizing (you need the solved type to compute a correct forall scheme).
 // This embedded solve is shown as a nested "solve-phase" within generation.
 
-class WPrimeTracer {
-  steps: Step[] = [];
-  nodeTypes: Map<NodeId, Type> = new Map();
-  paramTypes: Map<NodeId, Type> = new Map();
-  bindingSchemes: Map<NodeId, Scheme> = new Map();
-  lamBodyTypes: Map<NodeId, Type> = new Map();
-  varSchemes: Map<NodeId, Scheme> = new Map();
-  introducedVars: Set<TVarName> = new Set();
-  letBodyTypes: Map<NodeId, Type> = new Map();
-  constraints: Constraint[] = [];
-  solvedConstraintIds: number[] = [];
-  activeConstraintId?: number;
-  private nextConstraintId = 0;
-
-  push(args: {
-    kind: StepKind;
-    nodeId?: NodeId;
-    env: Env;
-    subst: Subst;
-    message: string;
-    detail?: Step["detail"];
-  }): void {
-    this.steps.push({
-      index: this.steps.length,
-      kind: args.kind,
-      nodeId: args.nodeId,
-      env: new Map(args.env),
-      subst: new Map(args.subst),
-      nodeTypes: new Map(this.nodeTypes),
-      paramTypes: new Map(this.paramTypes),
-      bindingSchemes: new Map(this.bindingSchemes),
-      lamBodyTypes: new Map(this.lamBodyTypes),
-      letBodyTypes: new Map(this.letBodyTypes),
-      varSchemes: new Map(this.varSchemes),
-      expectedTypes: new Map(),
-      introducedVars: new Set(this.introducedVars),
-      message: args.message,
-      detail: args.detail,
-      constraints: [...this.constraints],
-      solvedConstraintIds: [...this.solvedConstraintIds],
-      activeConstraintId: this.activeConstraintId,
-    });
-  }
-
-  emitConstraint(
-    left: Type,
-    right: Type,
-    reason: string,
-    nodeId: NodeId | undefined,
-    env: Env,
-    subst: Subst,
-  ): Constraint {
-    const c: Constraint = { id: this.nextConstraintId++, left, right, reason };
-    this.constraints.push(c);
-    this.push({
-      kind: "emit-constraint",
-      nodeId,
-      env,
-      subst,
-      message: `emit [${c.id}]: ${showType(left)} = ${showType(right)}  (${reason})`,
-      detail: { left, right },
-    });
-    return c;
-  }
-
-  introduceVar(name: TVarName): void {
-    this.introducedVars.add(name);
-  }
-
-  recordNodeType(id: NodeId, t: Type): void {
-    this.nodeTypes.set(id, t);
-  }
-
-  recordParamType(id: NodeId, t: Type): void {
-    this.paramTypes.set(id, t);
-  }
-
-  recordBindingScheme(id: NodeId, sc: Scheme): void {
-    this.bindingSchemes.set(id, sc);
-  }
-
-  recordLamBodyType(id: NodeId, t: Type): void {
-    this.lamBodyTypes.set(id, t);
-  }
-
-  recordLetBodyType(id: NodeId, t: Type): void {
-    this.letBodyTypes.set(id, t);
-  }
-
-  recordVarScheme(id: NodeId, sc: Scheme): void {
-    this.varSchemes.set(id, sc);
-  }
-
-  clearVarScheme(id: NodeId): void {
-    this.varSchemes.delete(id);
-  }
-
-  applySubstToAll(subst: Subst): void {
-    for (const [id, t] of this.nodeTypes) this.nodeTypes.set(id, applySubstType(subst, t));
-    for (const [id, t] of this.paramTypes) this.paramTypes.set(id, applySubstType(subst, t));
-    for (const [id, t] of this.lamBodyTypes) this.lamBodyTypes.set(id, applySubstType(subst, t));
-    for (const [id, t] of this.letBodyTypes) this.letBodyTypes.set(id, applySubstType(subst, t));
-    for (const [id, sc] of this.bindingSchemes)
-      this.bindingSchemes.set(id, applySubstScheme(subst, sc));
-  }
-}
-
-function freshTV(tr: WPrimeTracer, fresh: FreshSupply): Type {
-  const t = fresh.fresh();
-  if (t.kind === "TVar") tr.introduceVar(t.name);
-  return t;
-}
-
-function makeUnifyOpts(tr: WPrimeTracer, env: Env, nodeId?: NodeId): UnifyOpts {
-  return {
-    onApplySubst: (input, output, subst) => {
-      const noop = typeEquals(input, output);
-      tr.push({
-        kind: "subst-apply",
-        nodeId,
-        env,
-        subst,
-        message: noop
-          ? `apply σ to ${showType(input)} (no change)`
-          : `apply σ to ${showType(input)} ⇒ ${showType(output)}`,
-        detail: { input, output, where: "top of unify" },
-      });
-    },
-    onRecurse: (side, t1, t2, subst) => {
-      tr.push({
-        kind: "unify-recurse",
-        nodeId,
-        env,
-        subst,
-        message: `recurse into ${side} of ->: unify ${showType(t1)} with ${showType(t2)}`,
-        detail: { left: t1, right: t2 },
-      });
-    },
-    onBind: (varName, t, substBefore, substAfter) => {
-      const rawSubst: Subst = new Map(substBefore);
-      rawSubst.set(varName, t);
-      tr.push({
-        kind: "bind-var",
-        nodeId,
-        env,
-        subst: rawSubst,
-        message: `bind ${varName} ↦ ${showType(t)}`,
-        detail: { name: varName, type: t },
-      });
-      let changed = false;
-      for (const [k, v] of substBefore) {
-        const after = substAfter.get(k);
-        if (after && !typeEquals(v, after)) { changed = true; break; }
-      }
-      if (changed) {
-        tr.push({
-          kind: "subst-compose",
-          nodeId,
-          env,
-          subst: substAfter,
-          message: `compose: apply ${varName} ↦ ${showType(t)} to existing σ entries`,
-          detail: { name: varName, type: t },
-        });
-      }
-    },
-  };
-}
-
 // Solve one constraint. Updates tr.solvedConstraintIds and applies the new
 // subst to all recorded node types so the AST view stays current.
 function solveSingle(
   c: Constraint,
   subst: Subst,
-  tr: WPrimeTracer,
+  tr: Tracer,
   env: Env,
 ): Subst {
   tr.activeConstraintId = c.id;
@@ -260,7 +94,7 @@ function generate(
   env: Env,
   expr: Expr,
   subst: Subst,
-  tr: WPrimeTracer,
+  tr: Tracer,
   fresh: FreshSupply,
   role: string,
   onBeforeExit?: OnBeforeExit,
@@ -521,7 +355,7 @@ function generate(
 }
 
 export function inferWprime(env: Env, expr: Expr): InferResult {
-  const tracer = new WPrimeTracer();
+  const tracer = new Tracer();
   const fresh = new FreshSupply();
   try {
     const { type, subst: genSubst } = generate(
@@ -547,26 +381,8 @@ export function inferWprime(env: Env, expr: Expr): InferResult {
     for (const c of toSolve) {
       subst = solveSingle(c, subst, tracer, env);
     }
-    const finalType = applySubstType(subst, type);
-    tracer.push({
-      kind: "done",
-      nodeId: expr.id,
-      env,
-      subst,
-      message: `Final type: ${showType(finalType)}`,
-    });
-    return { type: finalType, subst, steps: tracer.steps };
+    return finalize(tracer, env, expr, subst, applySubstType(subst, type));
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      type: { kind: "TVar", name: "?" },
-      subst: emptySubst(),
-      steps: tracer.steps,
-      error: msg,
-    };
+    return errorResult(tracer, e);
   }
-}
-
-function truncate(s: string, n = 40): string {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }

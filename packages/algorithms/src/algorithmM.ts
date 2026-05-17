@@ -15,14 +15,9 @@
 import {
   type Env,
   type Expr,
-  type NodeId,
-  type Scheme,
   type Subst,
-  type TVarName,
   type Type,
-  type UnifyOpts,
   applySubstEnv,
-  applySubstScheme,
   applySubstType,
   emptySubst,
   FreshSupply,
@@ -34,163 +29,16 @@ import {
   tBool,
   tFun,
   tInt,
-  typeEquals,
-  unify,
-  UnifyError,
 } from "@infer-tutor/lang";
-import type { InferResult, Step, StepKind } from "./step";
-
-class MTracer {
-  steps: Step[] = [];
-  nodeTypes: Map<NodeId, Type> = new Map();
-  paramTypes: Map<NodeId, Type> = new Map();
-  bindingSchemes: Map<NodeId, Scheme> = new Map();
-  lamBodyTypes: Map<NodeId, Type> = new Map();
-  letBodyTypes: Map<NodeId, Type> = new Map();
-  varSchemes: Map<NodeId, Scheme> = new Map();
-  expectedTypes: Map<NodeId, Type> = new Map();
-  introducedVars: Set<TVarName> = new Set();
-
-  push(args: {
-    kind: StepKind;
-    nodeId?: NodeId;
-    env: Env;
-    subst: Subst;
-    message: string;
-    detail?: Step["detail"];
-  }): void {
-    this.steps.push({
-      index: this.steps.length,
-      kind: args.kind,
-      nodeId: args.nodeId,
-      env: new Map(args.env),
-      subst: new Map(args.subst),
-      nodeTypes: new Map(this.nodeTypes),
-      paramTypes: new Map(this.paramTypes),
-      bindingSchemes: new Map(this.bindingSchemes),
-      lamBodyTypes: new Map(this.lamBodyTypes),
-      letBodyTypes: new Map(this.letBodyTypes),
-      varSchemes: new Map(this.varSchemes),
-      expectedTypes: new Map(this.expectedTypes),
-      introducedVars: new Set(this.introducedVars),
-      message: args.message,
-      detail: args.detail,
-      constraints: [],
-      solvedConstraintIds: [],
-    });
-  }
-
-  recordNodeType(id: NodeId, t: Type): void { this.nodeTypes.set(id, t); }
-  recordParamType(id: NodeId, t: Type): void { this.paramTypes.set(id, t); }
-  recordBindingScheme(id: NodeId, sc: Scheme): void { this.bindingSchemes.set(id, sc); }
-  recordLamBodyType(id: NodeId, t: Type): void { this.lamBodyTypes.set(id, t); }
-  recordLetBodyType(id: NodeId, t: Type): void { this.letBodyTypes.set(id, t); }
-  recordVarScheme(id: NodeId, sc: Scheme): void { this.varSchemes.set(id, sc); }
-  clearVarScheme(id: NodeId): void { this.varSchemes.delete(id); }
-  setExpected(id: NodeId, t: Type): void { this.expectedTypes.set(id, t); }
-  clearExpected(id: NodeId): void { this.expectedTypes.delete(id); }
-  introduceVar(name: TVarName): void { this.introducedVars.add(name); }
-
-  pushSubstApply(args: {
-    nodeId?: NodeId;
-    env: Env;
-    subst: Subst;
-    input: Type;
-    output: Type;
-    where: string;
-  }): void {
-    const noop = typeEquals(args.input, args.output);
-    this.push({
-      kind: "subst-apply",
-      nodeId: args.nodeId,
-      env: args.env,
-      subst: args.subst,
-      message: noop
-        ? `apply σ to ${showType(args.input)} (${args.where}, no change)`
-        : `apply σ to ${showType(args.input)} ⇒ ${showType(args.output)} (${args.where})`,
-      detail: { input: args.input, output: args.output, where: args.where },
-    });
-  }
-}
-
-function freshTV(tr: MTracer, fresh: FreshSupply): Type {
-  const t = fresh.fresh();
-  if (t.kind === "TVar") tr.introduceVar(t.name);
-  return t;
-}
-
-function unifyOpts(tr: MTracer, env: Env, nodeId?: NodeId): UnifyOpts {
-  return {
-    onApplySubst: (input, output, subst) => {
-      tr.pushSubstApply({ nodeId, env, subst, input, output, where: "top of unify" });
-    },
-    onRecurse: (side, t1, t2, subst) => {
-      tr.push({
-        kind: "unify-recurse",
-        nodeId,
-        env,
-        subst,
-        message: `recurse into ${side} of ->: unify ${showType(t1)} with ${showType(t2)}`,
-        detail: { left: t1, right: t2 },
-      });
-    },
-    onBind: (varName, t, substBefore, substAfter) => {
-      // bind-var shows σ with the new binding naively inserted (no
-      // composition into existing RHS yet) so the next step can highlight
-      // the composition itself as a distinct event.
-      const rawSubst: Subst = new Map(substBefore);
-      rawSubst.set(varName, t);
-      tr.push({
-        kind: "bind-var",
-        nodeId,
-        env,
-        subst: rawSubst,
-        message: `bind ${varName} ↦ ${showType(t)}`,
-        detail: { name: varName, type: t },
-      });
-      // composeSubst rewrote some existing entries' RHS — show that.
-      let changed = false;
-      for (const [k, v] of substBefore) {
-        const after = substAfter.get(k);
-        if (after && !typeEquals(v, after)) { changed = true; break; }
-      }
-      if (changed) {
-        tr.push({
-          kind: "subst-compose",
-          nodeId,
-          env,
-          subst: substAfter,
-          message: `compose: apply ${varName} ↦ ${showType(t)} to existing σ entries`,
-          detail: { name: varName, type: t },
-        });
-      }
-    },
-  };
-}
-
-function doUnify(
-  left: Type,
-  right: Type,
-  subst: Subst,
-  tr: MTracer,
-  env: Env,
-  nodeId: NodeId | undefined,
-  enterMsg: string,
-  successMsg: string,
-): Subst {
-  tr.push({ kind: "unify-enter", nodeId, env, subst, message: enterMsg, detail: { left, right } });
-  try {
-    const s = unify(left, right, subst, unifyOpts(tr, env, nodeId));
-    tr.push({ kind: "unify-success", nodeId, env: applySubstEnv(s, env), subst: s, message: successMsg });
-    return s;
-  } catch (e) {
-    if (e instanceof UnifyError) {
-      tr.push({ kind: "unify-fail", nodeId, env, subst,
-        message: `unification failed: ${e.message}`, detail: { left: e.left, right: e.right } });
-    }
-    throw e;
-  }
-}
+import type { InferResult } from "./step";
+import {
+  Tracer,
+  doUnify,
+  errorResult,
+  finalize,
+  freshTV,
+  truncate,
+} from "./tracer";
 
 type OnBeforeExit = (type: Type, subst: Subst) => void;
 
@@ -202,7 +50,7 @@ function check(
   expr: Expr,
   expected: Type,
   subst: Subst,
-  tr: MTracer,
+  tr: Tracer,
   fresh: FreshSupply,
   role: string,
   onBeforeExit?: OnBeforeExit,
@@ -404,33 +252,15 @@ function check(
 }
 
 export function inferM(env: Env, expr: Expr): InferResult {
-  const tracer = new MTracer();
+  const tracer = new Tracer();
   const fresh = new FreshSupply();
   // Start with a fresh root expected type. The final program type is
   // applySubstType(subst, rootExpected) after checking.
   const rootExpected = freshTV(tracer, fresh);
   try {
     const subst = check(env, expr, rootExpected, emptySubst(), tracer, fresh, "root expression");
-    const finalType = applySubstType(subst, rootExpected);
-    // Final pass: apply subst to all recorded types so the done snapshot
-    // shows everything fully resolved.
-    for (const [id, t] of tracer.nodeTypes)
-      tracer.nodeTypes.set(id, applySubstType(subst, t));
-    for (const [id, t] of tracer.paramTypes)
-      tracer.paramTypes.set(id, applySubstType(subst, t));
-    for (const [id, sc] of tracer.bindingSchemes)
-      tracer.bindingSchemes.set(id, applySubstScheme(subst, sc));
-    for (const [id, t] of tracer.letBodyTypes)
-      tracer.letBodyTypes.set(id, applySubstType(subst, t));
-    tracer.push({ kind: "done", nodeId: expr.id, env, subst,
-      message: `Final type: ${showType(finalType)}` });
-    return { type: finalType, subst, steps: tracer.steps };
+    return finalize(tracer, env, expr, subst, applySubstType(subst, rootExpected));
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { type: { kind: "TVar", name: "?" }, subst: emptySubst(), steps: tracer.steps, error: msg };
+    return errorResult(tracer, e);
   }
-}
-
-function truncate(s: string, n = 40): string {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }

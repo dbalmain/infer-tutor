@@ -1,18 +1,13 @@
 import {
   type Env,
   type Expr,
-  type NodeId,
   type Scheme,
   type Subst,
-  type TVarName,
   type Type,
-  type UnifyOpts,
-  applySubstScheme,
-  FreshSupply,
   applySubstEnv,
   applySubstType,
-  composeSubst,
   emptySubst,
+  FreshSupply,
   generalize,
   instantiate,
   showExpr,
@@ -21,201 +16,27 @@ import {
   tBool,
   tFun,
   tInt,
-  typeEquals,
   unify,
   UnifyError,
 } from "@infer-tutor/lang";
-import type { InferResult, Step, StepKind } from "./step";
-
-class Tracer {
-  steps: Step[] = [];
-  nodeTypes: Map<NodeId, Type> = new Map();
-  paramTypes: Map<NodeId, Type> = new Map();
-  bindingSchemes: Map<NodeId, Scheme> = new Map();
-  lamBodyTypes: Map<NodeId, Type> = new Map();
-  letBodyTypes: Map<NodeId, Type> = new Map();
-  varSchemes: Map<NodeId, Scheme> = new Map();
-  introducedVars: Set<TVarName> = new Set();
-
-  push(args: {
-    kind: StepKind;
-    nodeId?: NodeId;
-    env: Env;
-    subst: Subst;
-    message: string;
-    detail?: Step["detail"];
-  }): void {
-    this.steps.push({
-      index: this.steps.length,
-      kind: args.kind,
-      nodeId: args.nodeId,
-      env: cloneEnv(args.env),
-      subst: cloneSubst(args.subst),
-      nodeTypes: cloneNodeTypes(this.nodeTypes),
-      paramTypes: cloneNodeTypes(this.paramTypes),
-      bindingSchemes: new Map(this.bindingSchemes),
-      lamBodyTypes: cloneNodeTypes(this.lamBodyTypes),
-      letBodyTypes: cloneNodeTypes(this.letBodyTypes),
-      varSchemes: new Map(this.varSchemes),
-      expectedTypes: new Map(),
-      introducedVars: new Set(this.introducedVars),
-      message: args.message,
-      detail: args.detail,
-      constraints: [],
-      solvedConstraintIds: [],
-    });
-  }
-
-  recordNodeType(id: NodeId, t: Type): void {
-    this.nodeTypes.set(id, t);
-  }
-
-  recordParamType(id: NodeId, t: Type): void {
-    this.paramTypes.set(id, t);
-  }
-
-  recordBindingScheme(id: NodeId, sc: Scheme): void {
-    this.bindingSchemes.set(id, sc);
-  }
-
-  recordLamBodyType(id: NodeId, t: Type): void {
-    this.lamBodyTypes.set(id, t);
-  }
-
-  recordLetBodyType(id: NodeId, t: Type): void {
-    this.letBodyTypes.set(id, t);
-  }
-
-  recordVarScheme(id: NodeId, sc: Scheme): void {
-    this.varSchemes.set(id, sc);
-  }
-
-  clearVarScheme(id: NodeId): void {
-    this.varSchemes.delete(id);
-  }
-
-  introduceVar(name: TVarName): void {
-    this.introducedVars.add(name);
-  }
-
-  // Emit a subst-apply step. Used both at canonical W-rule sites and inside
-  // unify (via the onApplySubst callback). The UI can filter out no-ops.
-  pushSubstApply(args: {
-    nodeId?: NodeId;
-    env: Env;
-    subst: Subst;
-    input: Type;
-    output: Type;
-    where: string;
-  }): void {
-    const noop = typeEquals(args.input, args.output);
-    this.push({
-      kind: "subst-apply",
-      nodeId: args.nodeId,
-      env: args.env,
-      subst: args.subst,
-      message: noop
-        ? `apply σ to ${showType(args.input)} (${args.where}, no change)`
-        : `apply σ to ${showType(args.input)} ⇒ ${showType(args.output)} (${args.where})`,
-      detail: { input: args.input, output: args.output, where: args.where },
-    });
-  }
-}
-
-function unifyOpts(tr: Tracer, env: Env, nodeId?: NodeId): UnifyOpts {
-  return {
-    onApplySubst: (input, output, subst) => {
-      tr.pushSubstApply({
-        nodeId,
-        env,
-        subst,
-        input,
-        output,
-        where: "top of unify",
-      });
-    },
-    onRecurse: (side, t1, t2, subst) => {
-      tr.push({
-        kind: "unify-recurse",
-        nodeId,
-        env,
-        subst,
-        message: `recurse into ${side} of ->: unify ${showType(t1)} with ${showType(t2)}`,
-        detail: { left: t1, right: t2 },
-      });
-    },
-    onBind: (varName, t, substBefore, substAfter) => {
-      const rawSubst: Subst = new Map(substBefore);
-      rawSubst.set(varName, t);
-      tr.push({
-        kind: "bind-var",
-        nodeId,
-        env,
-        subst: rawSubst,
-        message: `bind ${varName} ↦ ${showType(t)}`,
-        detail: { name: varName, type: t },
-      });
-      let changed = false;
-      for (const [k, v] of substBefore) {
-        const after = substAfter.get(k);
-        if (after && !typeEquals(v, after)) { changed = true; break; }
-      }
-      if (changed) {
-        tr.push({
-          kind: "subst-compose",
-          nodeId,
-          env,
-          subst: substAfter,
-          message: `compose: apply ${varName} ↦ ${showType(t)} to existing σ entries`,
-          detail: { name: varName, type: t },
-        });
-      }
-    },
-  };
-}
-
-function freshTV(tr: Tracer, fresh: FreshSupply): Type {
-  const t = fresh.fresh();
-  if (t.kind === "TVar") tr.introduceVar(t.name);
-  return t;
-}
+import type { InferResult } from "./step";
+import {
+  Tracer,
+  errorResult,
+  finalize,
+  freshTV,
+  makeUnifyOpts,
+  truncate,
+} from "./tracer";
 
 export function inferW(env: Env, expr: Expr): InferResult {
   const tracer = new Tracer();
   const fresh = new FreshSupply();
   try {
     const { subst, type } = infer(env, expr, emptySubst(), tracer, fresh, "root expression");
-    // Final resolve: walk all recorded types/schemes and apply σ. Silent
-    // (no per-node steps) — the user already knows σ; the done snapshot
-    // just shows everything finalized.
-    for (const [id, t] of tracer.nodeTypes) {
-      tracer.nodeTypes.set(id, applySubstType(subst, t));
-    }
-    for (const [id, t] of tracer.paramTypes) {
-      tracer.paramTypes.set(id, applySubstType(subst, t));
-    }
-    for (const [id, sc] of tracer.bindingSchemes) {
-      tracer.bindingSchemes.set(id, applySubstScheme(subst, sc));
-    }
-    for (const [id, t] of tracer.letBodyTypes) {
-      tracer.letBodyTypes.set(id, applySubstType(subst, t));
-    }
-    tracer.push({
-      kind: "done",
-      nodeId: expr.id,
-      env,
-      subst,
-      message: `Final type: ${showType(applySubstType(subst, type))}`,
-    });
-    return { type: applySubstType(subst, type), subst, steps: tracer.steps };
+    return finalize(tracer, env, expr, subst, applySubstType(subst, type));
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      type: { kind: "TVar", name: "?" },
-      subst: emptySubst(),
-      steps: tracer.steps,
-      error: msg,
-    };
+    return errorResult(tracer, e);
   }
 }
 
@@ -396,7 +217,7 @@ function infer(
         detail: { left, right },
       });
       try {
-        const s3 = unify(left, right, s2, unifyOpts(tr, env2, expr.id));
+        const s3 = unify(left, right, s2, makeUnifyOpts(tr, env2, expr.id));
         tr.push({
           kind: "unify-success",
           nodeId: expr.id,
@@ -526,7 +347,7 @@ function infer(
         message: `condition must be Bool: unify ${showType(tcResolved)} with Bool`,
         detail: { left: tcResolved, right: tBool },
       });
-      const sCond = unify(tcResolved, tBool, s1, unifyOpts(tr, env, expr.cond.id));
+      const sCond = unify(tcResolved, tBool, s1, makeUnifyOpts(tr, env, expr.cond.id));
       tr.push({
         kind: "unify-success",
         nodeId: expr.cond.id,
@@ -566,7 +387,7 @@ function infer(
         message: `branches must agree: unify ${showType(left)} with ${showType(right)}`,
         detail: { left, right },
       });
-      const s4 = unify(left, right, s3, unifyOpts(tr, applySubstEnv(s3, env), expr.id));
+      const s4 = unify(left, right, s3, makeUnifyOpts(tr, applySubstEnv(s3, env), expr.id));
       const result = applySubstType(s4, tElse);
       tr.recordNodeType(expr.id, result);
       tr.push({
@@ -589,22 +410,6 @@ function infer(
   }
 }
 
-function truncate(s: string, n = 40): string {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
-
-function cloneEnv(env: Env): Env {
-  return new Map(env);
-}
-
-function cloneSubst(s: Subst): Subst {
-  return new Map(s);
-}
-
-function cloneNodeTypes(m: Map<NodeId, Type>): Map<NodeId, Type> {
-  return new Map(m);
-}
-
 // Convenience: a small default env with a couple of built-ins.
 export function defaultEnv(): Env {
   const env: Env = new Map();
@@ -614,7 +419,6 @@ export function defaultEnv(): Env {
   env.set("not", scheme0(tFun(tBool, tBool)));
   // eq : forall a. a -> a -> Bool
   env.set("eq", { vars: ["a"], body: tFun({ kind: "TVar", name: "a" }, tFun({ kind: "TVar", name: "a" }, tBool)) });
-  // pair : forall a b. a -> b -> Pair a b   (skip until we have type apps; placeholder)
   return env;
 }
 
