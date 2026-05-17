@@ -1,14 +1,14 @@
 # infer-tutor
 
-An interactive web app for learning Hindley-Milner type inference. You watch the algorithm step by step, predict what comes next, and the app reveals the answer.
+An interactive web app for learning type inference. You watch the algorithm step by step, predict what comes next, and the app reveals the answer.
 
-Companion to [HindleyMilnerByExample.md](https://github.com/dbalmain/clex-project) — the paper-and-pencil tutorial; this is the interactive version.
+This repo contains the interactive tutor that accompanies the written tutorial.
 
 ## Status
 
-Phase A (v0.1): free-input mode, Algorithm W only.
+Current: free-input mode with Algorithms W, W', M, and bidirectional checking/synthesis.
 
-Planned: quiz mode, curated tour, Algorithms W' / M / BD.
+Planned: quiz mode, curated tour, richer trace explanations, and more examples.
 
 ## Develop
 
@@ -21,7 +21,7 @@ bun test         # algorithm + lang unit tests
 ## Layout
 
 - `packages/lang` — surface syntax, types, substitution, unification
-- `packages/algorithms` — one module per algorithm (currently W)
+- `packages/algorithms` — one module per algorithm
 - `packages/web` — React UI
 
 ## License
