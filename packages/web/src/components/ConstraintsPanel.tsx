@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { showType } from "@infer-tutor/lang";
 import type { Constraint } from "@infer-tutor/algorithms";
 

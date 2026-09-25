@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { type Expr, type NodeId, showType } from "@infer-tutor/lang";
 
 export type FocusMode = "default" | "enter" | "exit";

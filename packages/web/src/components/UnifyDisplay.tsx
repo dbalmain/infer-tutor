@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { type Type, showType } from "@infer-tutor/lang";
 
 // Curated palette — distinct hues, readable on dark background.

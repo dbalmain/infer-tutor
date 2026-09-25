@@ -40,12 +40,14 @@ describe("Bidirectional", () => {
 
   test("function synth-exit updates enclosing application result slot", () => {
     const expr = parse("let id = \\(x : Int) -> x in id 3");
-    if (expr.kind !== "Let" || expr.body.kind !== "App") throw new Error("expected let/app");
+    if (expr.kind !== "Let") throw new Error("expected let");
+    const body = expr.body;
+    if (body.kind !== "App") throw new Error("expected app");
     const r = inferBD(defaultEnv(), expr);
     if (r.error) throw new Error(r.error);
 
-    const fnExit = r.steps.find((s) => s.kind === "synth-exit" && s.nodeId === expr.body.fn.id);
+    const fnExit = r.steps.find((s) => s.kind === "synth-exit" && s.nodeId === body.fn.id);
     expect(fnExit).toBeDefined();
-    expect(showType(fnExit!.nodeTypes.get(expr.body.id)!)).toBe("Int");
+    expect(showType(fnExit!.nodeTypes.get(body.id)!)).toBe("Int");
   });
 });

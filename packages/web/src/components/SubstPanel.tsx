@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { type Subst, type TVarName, showType } from "@infer-tutor/lang";
 
 type Props = {

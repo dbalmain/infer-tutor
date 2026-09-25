@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { type Env, showScheme } from "@infer-tutor/lang";
 
 export function EnvPanel({

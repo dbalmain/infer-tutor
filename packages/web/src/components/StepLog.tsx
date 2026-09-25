@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, type JSX } from "react";
 import type { Expr, NodeId } from "@infer-tutor/lang";
 import type { Step } from "@infer-tutor/algorithms";
 import { ExprFocusView } from "./ExprFocusView";

@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { showType, type Type } from "@infer-tutor/lang";
 import type { Step } from "@infer-tutor/algorithms";
 
